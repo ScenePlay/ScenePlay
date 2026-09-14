@@ -2133,7 +2133,7 @@ def _cut(key):
             elif key in ('pre', 'intermission', 'post'):
                 built, _warn = ensure_show_scenes()
                 scene = built.get(key, scene)
-        obs_ws.switch_scene(scene)
+        obs_ws.switch_scene(scene, by='broadcast')
     except obs_ws.ObsRejected as exc:
         obs_ws._record_error(f'cut-{key}', exc)
         if exc.code == 600:

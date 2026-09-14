@@ -19,7 +19,7 @@ import core.events as events
 import integrations.obs_ws as obs_ws
 import routers.obs as obs
 from routers._util import json_body
-from security.deps import require_dm
+from security.deps import ApiError, require_dm
 from sql import appsettingGet, appsettingSet
 
 log = logging.getLogger(__name__)
@@ -313,3 +313,86 @@ def api_auto_cam_pause(data: dict = Depends(json_body), user=Depends(require_dm)
     appsettingSet(PAUSE_KEY, '1' if paused else '0')
     _emit_state()
     return {'ok': True, 'paused': paused}
+
+
+# ── switching ────────────────────────────────────────────────────────────────
+
+def _obs_error(exc):
+    if isinstance(exc, obs_ws.ObsRejected):
+        return f'OBS refused: {exc.comment or exc}'
+    return 'Lost the OBS connection.'
+
+
+@router.post('/arm')
+def api_arm(data: dict = Depends(json_body), user=Depends(require_dm)):
+    key = str(data.get('key', '') or '')
+    s = shot(key)
+    if not s:
+        raise ApiError(400, f'Unknown shot {key!r}', code='bad_shot')
+    if not s['built']:
+        return {'ok': False, 'error': f"{s['label']}: scene not built yet — run Build on the Broadcast page."}
+    if not obs_ws.connected():
+        return {'ok': False, 'error': 'OBS is not connected.'}
+    try:
+        obs_ws.set_preview_scene(s['scene'])
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return {'ok': False, 'error': _obs_error(exc)}
+    _armed['key'] = key
+    _emit_state()
+    return {'ok': True, 'armed': key, 'scene': s['scene']}
+
+
+def _take(transition, ms):
+    if not obs_ws.connected():
+        return {'ok': False, 'error': 'OBS is not connected.'}
+    scene = obs_ws.preview_scene()
+    if not scene:
+        return {'ok': False, 'error': 'Nothing armed.'}
+    try:
+        if transition:
+            obs_ws.set_transition(transition, ms)
+        obs_ws.trigger_transition()
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return {'ok': False, 'error': _obs_error(exc)}
+    key = _armed['key'] or ''
+    _armed['key'] = None
+    obs._emit('cut', target=key, scene=scene, by='producer')
+    _emit_state()
+    return {'ok': True, 'scene': scene, 'transition': transition}
+
+
+def _ms(data, default=None):
+    try:
+        v = int(data.get('ms'))
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+@router.post('/take')
+def api_take(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """Preview -> Program with the transition named in the body (or whatever
+    OBS has selected when none is given)."""
+    name = (data.get('transition') or '').strip() or None
+    return _take(name, _ms(data))
+
+
+@router.post('/auto')
+def api_auto(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """Preview -> Program with a fade (default 300 ms)."""
+    return _take('Fade', _ms(data, 300))
+
+
+@router.post('/transition')
+def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """Pick the default transition for the next Take without taking."""
+    name = (data.get('name') or '').strip()
+    if not name:
+        raise ApiError(400, 'transition name required', code='bad_request')
+    ms = _ms(data)
+    if obs_ws.connected():
+        try:
+            obs_ws.set_transition(name, ms)
+        except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+            return {'ok': False, 'error': _obs_error(exc)}
+    return {'ok': True, 'transition': name, 'ms': ms}

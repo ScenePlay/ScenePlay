@@ -255,3 +255,87 @@ def test_state_needs_dm(legacy_app, obs, fresh):
     db.session.add(pl); db.session.commit()
     with legacy_app.test_client(user=pl) as c:
         assert c.get('/ttrpg/producer/api/state').status_code == 403
+
+
+def test_arm_sets_preview(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    r = dm_client.post('/ttrpg/producer/api/arm', json={'key': 'char:1'})
+    assert r.get_json() == {'ok': True, 'armed': 'char:1', 'scene': 'Player - Carl'}
+    assert ('preview', 'Player - Carl') in obs['calls']
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['armed'] == 'char:1'
+
+
+def test_arm_unknown_and_unbuilt(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    assert dm_client.post('/ttrpg/producer/api/arm', json={'key': 'nope'}).status_code == 400
+    r = dm_client.post('/ttrpg/producer/api/arm', json={'key': 'pre'})
+    body = r.get_json()
+    assert body['ok'] is False and 'Build' in body['error']
+    assert not any(c[0] == 'preview' for c in obs['calls'])
+
+
+def test_arm_when_disconnected(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    obs['flags']['connected'] = False
+    body = dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'}).get_json()
+    assert body == {'ok': False, 'error': 'OBS is not connected.'}
+
+
+def test_take_with_nothing_armed(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body == {'ok': False, 'error': 'Nothing armed.'}
+    assert not any(c[0] == 'take' for c in obs['calls'])
+
+
+def test_take_uses_chosen_transition_and_tags_the_cut(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    import routers.obs as ro
+    emitted = []
+    monkeypatch.setattr(ro, '_emit', lambda kind, **x: emitted.append((kind, x)))
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
+    r = dm_client.post('/ttrpg/producer/api/take', json={'transition': 'Cut'})
+    assert r.get_json() == {'ok': True, 'scene': 'ScenePlay Map', 'transition': 'Cut'}
+    assert ('transition', 'Cut', None) in obs['calls'] and ('take',) in obs['calls']
+    assert ('cut', {'target': 'map', 'scene': 'ScenePlay Map', 'by': 'producer'}) in emitted
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['armed'] is None
+
+
+def test_auto_is_a_fade_take(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'dm'})
+    r = dm_client.post('/ttrpg/producer/api/auto', json={'ms': 500})
+    assert r.get_json() == {'ok': True, 'scene': 'DM - Jankis', 'transition': 'Fade'}
+    assert ('transition', 'Fade', 500) in obs['calls']
+
+
+def test_take_obs_rejection_is_reported(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    import integrations.obs_ws as obs_ws
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'party'})
+
+    def boom(timeout=3):
+        raise obs_ws.ObsRejected(500, 'studio mode is off')
+    monkeypatch.setattr(obs_ws, 'trigger_transition', boom)
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body['ok'] is False and 'studio mode is off' in body['error']
+
+
+def test_transition_default(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 700})
+    assert r.get_json() == {'ok': True, 'transition': 'Fade', 'ms': 700}
+    assert ('transition', 'Fade', 700) in obs['calls']
+
+
+def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
+    """The OBS router's own cut tells switch_scene who did it."""
+    import integrations.obs_ws as obs_ws
+    import routers.obs as ro
+    seen = []
+    monkeypatch.setattr(obs_ws, 'switch_scene', lambda scene, **k: seen.append((scene, k.get('by'))))
+    monkeypatch.setattr(obs_ws, 'scene_list', lambda refresh=False: (['ScenePlay Map'], 'ScenePlay Party'))
+    monkeypatch.setattr(ro, 'map_scene_name', lambda: 'ScenePlay Map')
+    monkeypatch.setattr(ro, '_special_scene', lambda special: '')
+    r = dm_client.post('/ttrpg/obs/api/cut/map')
+    assert r.status_code == 200 and seen == [('ScenePlay Map', 'broadcast')]
