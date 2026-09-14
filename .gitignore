@@ -213,3 +213,4 @@ sceneplay_launch.log
 # Claude Code worktrees + a venv symlink inside them
 .claude/worktrees/
 .venv
+.superpowers/
