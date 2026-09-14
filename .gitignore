@@ -209,3 +209,7 @@ dev.db
 dev.db-wal
 dev.db-shm
 sceneplay_launch.log
+
+# Claude Code worktrees + a venv symlink inside them
+.claude/worktrees/
+.venv
