@@ -1,6 +1,6 @@
 # Producer console — core (design)
 
-Date: 2026-09-14. Status: approved in conversation, awaiting implementation plan.
+Date: 2026-09-14. Status: approved; implementation plan at docs/superpowers/plans/2026-09-14-producer-console-core.md.
 
 ## Why
 
@@ -59,30 +59,31 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   Auto = Take with the fade transition. Take with nothing armed is a no-op with a toast.
 - Existing direct switches keep working unchanged: auto-cam, scene-linked cuts, Broadcast page
   cuts, `switch_scene` callers. They change Program directly (`SetCurrentProgramScene` is legal in
-  Studio Mode). The console shows "changed by: auto-cam / broadcast page / scene link" on the
-  Program tile from the `obs` event's `by` field, which `_emit('cut', …)` already carries.
+  Studio Mode). The Program tile shows who moved the shot — "producer", "broadcast page" or "automatic"
+  (auto-cam, scene link, auto-return, group cuts) — from a `last_switch` tag `obs_ws.switch_scene`
+  and the Take path record.
 - While at least one console is open, auto-cam is paused by default; a toggle on the console lets
   it run. Pausing is a setting (`obs_auto_cam_paused_by_producer`) so the watcher thread reads it
   cheaply; the watcher clears it when the last console leaves.
 
 ## Multiview
 
-- `routers/producer.py` owns a snapshot loop thread that runs only while `subscribers > 0`.
-  Program and Preview: `GetSourceScreenshot` at 320 px wide JPEG, quality 60, 2 per second.
-  Player tiles and the DM: 1 per 3 s. Frames are emitted on the `producer` SSE topic as
-  `{kind:'snap', target, jpeg_b64, at}`; the hub's derived-topic hashing is bypassed (frames are
-  raw events, not derived state). Loop stops 10 s after the last subscriber disappears.
-- Subscription counting: `POST /ttrpg/producer/api/session` (open) returns a console id and the
-  client pings `…/session/ping` every 15 s over the same SSE keep-alive; a console is dropped
-  after 45 s without a ping or on `DELETE …/session`.
+- Snapshots are **polled**, not streamed: `GET /ttrpg/producer/api/snap/{program|preview|<shot key>}`
+  returns one 320 px JPEG (`GetSourceScreenshot`, quality 60, `Cache-Control: no-store`; 204 when OBS
+  has nothing). The console refreshes Program and Preview twice a second and every shot tile every
+  3 s, only while the tab is visible. Base64 frames never touch `tblEvents`.
+- Audio levels are polled the same way (`GET …/levels`, 4 Hz) from the `InputVolumeMeters` event
+  stream, which the server subscribes to (obs-websocket `Reidentify`) only while a console is open.
+- Console presence: `POST …/session` opens a console and returns an id; the page pings every 15 s;
+  a console is dropped after 45 s without a ping or on `DELETE …/session/{id}`.
 - Budget: roughly 20 KB per Program/Preview frame → ~80 KB/s per console. Fine on LAN and remote.
+- Three consecutive failed frames drop the monitor refresh to 1 fps until one succeeds.
 
 ## Strip and extras
 
 - **Audio.** Per-feed mute and the DM mute reuse `POST /ttrpg/obs/api/mute`; per-scene audio rules
-  reuse `/api/scene-audio`. Levels come from obs-websocket `InputVolumeMeters` (subscribe with the
-  `InputVolumeMeters` event flag only while a console is open) relayed as `{kind:'levels', inputs}`
-  on the `producer` topic at 4 Hz. Music: the player bar's session-less calls (`/set_volume`,
+  reuse `/api/scene-audio`. Levels come from obs-websocket `InputVolumeMeters` (subscribed only while
+  a console is open) and are polled by the console at 4 Hz from `GET …/levels`. Music: the player bar's session-less calls (`/set_volume`,
   `/nextsong`, `/killqueue`, `/music_stopstart`) and `nowplaying` for the title. "Mute all but DM"
   = existing `{all:true, muted:true}`.
 - **ScenePlay scenes.** Tiles from `GET /api/scenes` (colour, LED pattern name); click posts
@@ -109,8 +110,8 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   `trigger_transition()`, `set_transition(name, ms)`, `record_chapter(name)`, `screenshot(source,
   width, fmt, quality)` (wrapping the existing raw call used by the dark-camera probe), and an
   `InputVolumeMeters` subscription toggle.
-- `core/events.py` `TOPICS` and `web/app/topics.js` gain `producer`. Console events: `snap`,
-  `levels`, `state` (any change to the state document above).
+- `core/events.py` `TOPICS` and `web/app/topics.js` gain `producer`. One console event kind,
+  `state`: emitted on any change to the state document above (the console re-fetches it).
 - No new tables, columns or Alembic revisions in this phase.
 
 ## Frontend
@@ -140,8 +141,7 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   paused while a console is open and cleared after, countdown set/clear, marker with and without
   recording (chapter call only when recording), snapshot loop starts on first subscriber and stops
   after the last, `state` document shape.
-- `tests/test_events.py`: `producer` accepted by `/api/v1/events`, `snap` frames pass through
-  unhashed.
+- `tests/test_events.py`: `producer` accepted by `/api/v1/events`.
 - `tests/test_web_assets.py` keeps covering the new route and modules automatically.
 - `scripts/spa_smoke.py`: open the console, arm by hotkey, Take, mute-all, marker, against the
   stubbed OBS state.
