@@ -79,9 +79,12 @@ def test_hub_fanout_and_slow_client_drop(client):
 
 
 def test_producer_topic_is_accepted(client, dm_token):
+    """`producer` passes the events endpoint's topic validation. The stream
+    itself is never opened here: an SSE response never ends under the
+    TestClient, so a mixed request is the proof — the 400 names only the
+    bogus topic, which means `producer` was accepted."""
     assert events.topic_ok('producer')
-    with client.stream('GET', '/api/v1/events?topics=producer',
-                       headers={'Authorization': f'Bearer {dm_token}'}) as r:
-        assert r.status_code == 200
-        first = next(r.iter_lines())
-        assert 'hello' in first
+    r = client.get('/api/v1/events?topics=producer,bogus',
+                   headers={'Authorization': f'Bearer {dm_token}'})
+    assert r.status_code == 400
+    assert 'bogus' in r.json()['error'] and 'producer' not in r.json()['error']
