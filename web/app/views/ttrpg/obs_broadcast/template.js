@@ -654,7 +654,8 @@ export function render(d) {
   return html`<div class="row justify-content-center"><div class="col-lg-8">
 
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-      <h4 style="${H6}" class="mb-0">&#127909; Broadcast (OBS)</h4>
+      <h4 style="${H6}" class="mb-0">&#127909; Broadcast (OBS)
+        <a href="${cfg.producer_url}" class="btn btn-sm btn-outline-secondary ms-2" title="Preview/Program switching, multiview, audio strip">&#127916; Producer console</a></h4>
       <a href="/ttrpg/obs" class="btn btn-sm btn-outline-secondary">&#8635; Refresh</a>
     </div>
 

@@ -112,3 +112,13 @@ def test_topics_match_backend():
     src = _read(os.path.join(WEB, 'app', 'topics.js'))
     names = re.findall(r"'([a-z]+)'", src.split('PARAM_PREFIXES')[0])
     assert set(names) == events.TOPICS
+
+
+def test_producer_console_route_and_modules(client, dm_token):
+    r = client.get('/ttrpg/producer', headers={'Authorization': f'Bearer {dm_token}'})
+    assert r.status_code == 200 and '/app/main.js' in r.text
+    for f in ('web/app/views/ttrpg/producer/index.js', 'web/app/views/ttrpg/producer/template.js',
+              'web/app/views/ttrpg/producer/console.js', 'web/css/views/producer.css'):
+        assert __import__('os').path.exists(f), f
+    routes = open('web/app/routes.js', encoding='utf-8').read()
+    assert "path: '/ttrpg/producer'" in routes and "bodyClass: 'producer'" in routes

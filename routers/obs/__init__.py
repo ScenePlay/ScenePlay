@@ -181,6 +181,7 @@ def _obs_cfg():
                           or 'auto') != 'auto'),
         'music_label':   music_device_label(),
         'music_push':    music_push_url(),
+        'producer_url':  '/ttrpg/producer',
         # The cable half of the feed path — Windows only, where there is no
         # sink for mpv to play into and nothing for the push tab to capture.
         'music_cable':   music_cable_platform(),

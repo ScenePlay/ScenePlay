@@ -1,0 +1,38 @@
+/* Producer console: a switcher desk on a laptop, side by side with the stream. */
+body.producer .container, body.producer .container-fluid { max-width: none; }
+.pc { display: grid; gap: .6rem; grid-template-columns: 1fr 1fr 16rem; grid-template-areas:
+  "pvw pgm side" "shots shots side" "sp audio audio"; }
+@media (max-width: 1100px) { .pc { grid-template-columns: 1fr 1fr; grid-template-areas:
+  "pvw pgm" "side side" "shots shots" "sp audio"; } }
+@media (max-width: 720px) { .pc { grid-template-columns: 1fr; grid-template-areas:
+  "pgm" "pvw" "side" "shots" "sp" "audio"; } }
+.pc-pvw { grid-area: pvw; } .pc-pgm { grid-area: pgm; } .pc-side { grid-area: side; }
+.pc-shots { grid-area: shots; } .pc-sp { grid-area: sp; } .pc-audio { grid-area: audio; }
+.pc-mon { position: relative; background: #000; border: 3px solid var(--sp-border, #444); border-radius: 6px;
+  aspect-ratio: 16 / 9; overflow: hidden; }
+.pc-mon img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pc-mon.pvw { border-color: #2e8b57; } .pc-mon.pgm { border-color: #c0392b; }
+.pc-mon .pc-tag { position: absolute; left: .4rem; top: .3rem; font-size: .75rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; padding: .1rem .45rem; border-radius: 4px; background: rgba(0,0,0,.65); }
+.pc-mon.pgm .pc-tag { background: #c0392b; } .pc-mon.pvw .pc-tag { background: #2e8b57; }
+.pc-mon .pc-by { position: absolute; right: .4rem; bottom: .3rem; font-size: .7rem; opacity: .8;
+  background: rgba(0,0,0,.6); padding: .1rem .4rem; border-radius: 4px; }
+.pc-shot { position: relative; width: 9.5rem; border: 3px solid var(--sp-border, #444); border-radius: 6px;
+  background: var(--sp-surface-2, #222); cursor: pointer; padding: 0; overflow: hidden; text-align: left; }
+.pc-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
+.pc-shot .pc-shot-label { display: block; padding: .2rem .4rem; font-size: .8rem; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.pc-shot .pc-key { position: absolute; left: .3rem; top: .25rem; font-size: .7rem; background: rgba(0,0,0,.65);
+  padding: 0 .35rem; border-radius: 3px; }
+.pc-shot.armed { border-color: #2e8b57; } .pc-shot.live { border-color: #c0392b; }
+.pc-shot.unbuilt { opacity: .45; cursor: not-allowed; }
+.pc-take { font-size: 1.2rem; font-weight: 700; min-width: 8rem; }
+.pc-meter { height: .45rem; background: #222; border-radius: 3px; overflow: hidden; }
+.pc-meter > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2e8b57 70%, #c9a227 85%, #c0392b); }
+.pc-strip { display: grid; grid-template-columns: 1fr auto; gap: .25rem .5rem; align-items: center; font-size: .85rem; }
+.pc-scene { width: 8.5rem; text-align: left; border-left: .4rem solid transparent; }
+.pc-scene.active { outline: 2px solid var(--ttrpg-accent, #c9a227); }
+.pc-clock { font-variant-numeric: tabular-nums; font-size: 1.25rem; }
+.pc-count.warn { color: #c9a227; } .pc-count.over { color: #c0392b; }
+.pc-banner { background: #c0392b; color: #fff; padding: .35rem .6rem; border-radius: 4px; }
+.pc-markers { max-height: 9rem; overflow: auto; font-size: .8rem; }

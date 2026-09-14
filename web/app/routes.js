@@ -63,6 +63,7 @@ export const routes = [
   { path: '/ttrpg/relay/party', view: V('ttrpg/relay_party'), layout: 'ttrpg', auth: 'dm' },
   { path: '/ttrpg/relay/rolls', view: V('ttrpg/relay_rolls'), layout: 'ttrpg', auth: 'dm' },
   { path: '/ttrpg/register', view: V('ttrpg/users'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/producer', view: V('ttrpg/producer/index'), layout: 'ttrpg', auth: 'dm', bodyClass: 'producer' },
   { path: '/ttrpg/obs', view: V('ttrpg/obs_broadcast/index'), layout: 'ttrpg', auth: 'dm' },
   { path: '/ttrpg/obs/feed/:id', view: V('ttrpg/obs_my_feed'), layout: 'ttrpg', auth: 'user' },
 ];
