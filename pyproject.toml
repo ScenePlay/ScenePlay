@@ -1,6 +1,6 @@
 [project]
 name = "sceneplay"
-version = "2.0.10"
+version = "2.0.11"
 description = "Self-hosted atmosphere controller for tabletop gaming: music/video via mpv, LED lighting, TTRPG toolkit, remote-play relay and OBS control (FastAPI + SQLite + single-page app)"
 readme = "README.md"
 requires-python = ">=3.13"

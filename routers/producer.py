@@ -398,3 +398,91 @@ def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
     except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
         return {'ok': False, 'error': _obs_error(exc)}
     return {'ok': True, 'transition': name, 'ms': ms}
+
+
+# ── clocks and markers ───────────────────────────────────────────────────────
+
+MARKERS_MAX = 200
+_TS = '%Y-%m-%d %H:%M:%S'
+
+
+@router.post('/countdown')
+def api_countdown(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """{'seconds': n} counts down from now; {'until': 'YYYY-MM-DD HH:MM:SS'}
+    sets an absolute end; {'clear': true} removes it."""
+    from datetime import timedelta
+    key = 'producer_countdown_until' + _sfx()
+    if data.get('clear'):
+        appsettingSet(key, '')
+        _emit_state()
+        return {'ok': True, 'until': ''}
+    until = None
+    if data.get('until'):
+        try:
+            until = datetime.strptime(str(data['until']).strip(), _TS)
+        except ValueError:
+            raise ApiError(400, 'until must be YYYY-MM-DD HH:MM:SS', code='bad_request')
+    elif data.get('seconds') is not None:
+        try:
+            secs = int(data['seconds'])
+        except (TypeError, ValueError):
+            raise ApiError(400, 'seconds must be an integer', code='bad_request')
+        if secs <= 0:
+            raise ApiError(400, 'seconds must be positive', code='bad_request')
+        until = datetime.now() + timedelta(seconds=secs)
+    if until is None:
+        raise ApiError(400, 'seconds, until or clear required', code='bad_request')
+    text = until.strftime(_TS)
+    appsettingSet(key, text)
+    _emit_state()
+    return {'ok': True, 'until': text}
+
+
+@router.post('/clock/reset')
+def api_clock_reset(user=Depends(require_dm)):
+    now = _now()
+    appsettingSet('producer_clock_start' + _sfx(), now)
+    _emit_state()
+    return {'ok': True, 'clock_start': now}
+
+
+def _save_markers(rows):
+    appsettingSet('producer_markers' + _sfx(), json.dumps(rows[-MARKERS_MAX:]))
+
+
+@router.post('/marker')
+def api_marker(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """Stamp the moment: a chapter in the recording when one is running, and
+    always a row in the session's marker list (for the edit later)."""
+    note = (str(data.get('note', '') or '')).strip()[:200] or 'Marker'
+    snap = obs_ws.current_state()
+    recording = bool(snap.get('recording'))
+    marker = {'at': _now(), 'timecode': snap.get('record_timecode', '') if recording else '',
+              'note': note, 'recording': recording, 'chapter': False}
+    warning = ''
+    if recording and obs_ws.connected():
+        try:
+            obs_ws.record_chapter(note)
+            marker['chapter'] = True
+        except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+            warning = f'Marker saved, but OBS did not add a chapter: {getattr(exc, "comment", "") or exc}'
+    rows = _markers()
+    rows.append(marker)
+    _save_markers(rows)
+    _emit_state()
+    out = {'ok': True, 'marker': marker}
+    if warning:
+        out['warning'] = warning
+    return out
+
+
+@router.get('/markers')
+def api_markers(user=Depends(require_dm)):
+    return {'markers': _markers()}
+
+
+@router.delete('/markers')
+def api_markers_clear(user=Depends(require_dm)):
+    _save_markers([])
+    _emit_state()
+    return {'ok': True}

@@ -368,3 +368,68 @@ def test_transition_when_disconnected(dm_client, obs, fresh, monkeypatch):
     body = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 300}).get_json()
     assert body == {'ok': False, 'error': 'OBS is not connected.'}
     assert not any(c[0] == 'transition' for c in obs['calls'])
+
+
+def test_countdown_seconds_until_and_clear(dm_client, obs, fresh, monkeypatch):
+    from sql import appsettingGet
+    r = dm_client.post('/ttrpg/producer/api/countdown', json={'seconds': 600})
+    body = r.get_json()
+    assert body['ok'] and len(body['until']) == 19
+    assert appsettingGet('producer_countdown_until', '') == body['until']
+    r = dm_client.post('/ttrpg/producer/api/countdown', json={'until': '2030-01-01 20:15:00'})
+    assert r.get_json()['until'] == '2030-01-01 20:15:00'
+    r = dm_client.post('/ttrpg/producer/api/countdown', json={'clear': True})
+    assert r.get_json() == {'ok': True, 'until': ''}
+    assert appsettingGet('producer_countdown_until', '') == ''
+
+
+def test_countdown_rejects_garbage(dm_client, obs, fresh):
+    assert dm_client.post('/ttrpg/producer/api/countdown', json={'until': 'soon'}).status_code == 400
+    assert dm_client.post('/ttrpg/producer/api/countdown', json={}).status_code == 400
+
+
+def test_clock_reset(dm_client, obs, fresh, monkeypatch):
+    from sql import appsettingGet
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/session')
+    first = appsettingGet('producer_clock_start', '')
+    assert len(first) == 19
+    r = dm_client.post('/ttrpg/producer/api/clock/reset')
+    assert r.get_json()['ok'] and len(r.get_json()['clock_start']) == 19
+
+
+def test_marker_while_recording_creates_chapter(dm_client, obs, fresh):
+    obs['state']['recording'] = True
+    obs['state']['record_timecode'] = '00:12:03.500'
+    r = dm_client.post('/ttrpg/producer/api/marker', json={'note': 'Dragon appears'})
+    body = r.get_json()
+    assert body['ok'] and body['marker']['note'] == 'Dragon appears'
+    assert body['marker']['recording'] is True and body['marker']['timecode'] == '00:12:03.500'
+    assert ('chapter', 'Dragon appears') in obs['calls']
+    assert dm_client.get('/ttrpg/producer/api/markers').get_json()['markers'][-1]['note'] == 'Dragon appears'
+
+
+def test_marker_without_recording_is_kept_but_no_chapter(dm_client, obs, fresh):
+    body = dm_client.post('/ttrpg/producer/api/marker', json={'note': ''}).get_json()
+    assert body['ok'] and body['marker']['note'] == 'Marker' and body['marker']['recording'] is False
+    assert not any(c[0] == 'chapter' for c in obs['calls'])
+
+
+def test_marker_chapter_rejection_is_not_fatal(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    obs['state']['recording'] = True
+
+    def boom(name, timeout=3):
+        raise obs_ws.ObsRejected(501, 'no chapters in this container')
+    monkeypatch.setattr(obs_ws, 'record_chapter', boom)
+    body = dm_client.post('/ttrpg/producer/api/marker', json={'note': 'x'}).get_json()
+    assert body['ok'] and body['marker']['chapter'] is False and 'container' in body['warning']
+
+
+def test_markers_capped_and_clearable(dm_client, obs, fresh):
+    for i in range(205):
+        dm_client.post('/ttrpg/producer/api/marker', json={'note': str(i)})
+    ms = dm_client.get('/ttrpg/producer/api/markers').get_json()['markers']
+    assert len(ms) == 200 and ms[0]['note'] == '5' and ms[-1]['note'] == '204'
+    assert dm_client.delete('/ttrpg/producer/api/markers').get_json() == {'ok': True}
+    assert dm_client.get('/ttrpg/producer/api/markers').get_json()['markers'] == []
