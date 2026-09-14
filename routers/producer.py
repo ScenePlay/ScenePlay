@@ -33,9 +33,13 @@ SPECIALS_FRONT = ('party', 'map')
 SPECIALS_BACK = ('pre', 'intermission', 'post')
 
 _consoles = {}               # console_id -> last ping (time.monotonic())
-_lock = threading.Lock()     # guards _consoles, _off_timer and _sweep_timer
+_lock = threading.Lock()     # guards _consoles, _off_timer, _sweep_timer and _sweep_gen
 _off_timer = None
 _sweep_timer = None
+_sweep_gen = 0                # bumped each time a sweeper chain is (re)armed from
+                               # open_console; a running _sweep() retires instead of
+                               # re-arming once its generation is superseded, so a
+                               # close-then-reopen inside SWEEP_S never leaves two chains
 _armed = {'key': None}       # shot key currently in Preview (by this router)
 
 
@@ -125,17 +129,28 @@ def _schedule_off():
         t.start()
 
 
-def _sweep():
+def _sweep(gen):
     """Self-re-arming reap: notices a console that crashed without DELETE and
     stopped pinging, even if nobody else calls into this module meanwhile.
     Re-arms only while a console is still on record; console_count() itself
-    schedules the Studio-Mode-off grace timer when a reap empties the set."""
+    schedules the Studio-Mode-off grace timer when a reap empties the set.
+
+    `gen` pins this call to the sweeper chain that scheduled it. A chain that
+    a close-then-reopen has superseded (open_console bumps _sweep_gen and
+    arms a fresh chain) retires here instead of re-arming, even if its Timer
+    fired anyway before the cancel() reached it — so exactly one chain is
+    ever running."""
     global _sweep_timer
+    with _lock:
+        if gen != _sweep_gen:
+            return
     console_count()
     t = None
     with _lock:
+        if gen != _sweep_gen:
+            return
         if _consoles:
-            t = threading.Timer(SWEEP_S, _sweep)
+            t = threading.Timer(SWEEP_S, _sweep, args=(gen,))
             t.daemon = True
             _sweep_timer = t
         else:
@@ -145,7 +160,7 @@ def _sweep():
 
 
 def open_console():
-    global _off_timer, _sweep_timer
+    global _off_timer, _sweep_timer, _sweep_gen
     cid = uuid.uuid4().hex[:12]
     now = time.monotonic()
     sweep_t = None
@@ -156,7 +171,10 @@ def open_console():
             _off_timer.cancel()
             _off_timer = None
         if first:
-            sweep_t = threading.Timer(SWEEP_S, _sweep)
+            if _sweep_timer is not None:
+                _sweep_timer.cancel()          # a still-pending chain from before this
+            _sweep_gen += 1                    # reopen: retire it, start a fresh one
+            sweep_t = threading.Timer(SWEEP_S, _sweep, args=(_sweep_gen,))
             sweep_t.daemon = True
             _sweep_timer = sweep_t
     if sweep_t is not None:
