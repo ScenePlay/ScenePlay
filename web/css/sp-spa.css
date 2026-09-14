@@ -1,0 +1,9 @@
+/* Shell-only styles for the single-page app (layouts, boot, toasts). */
+.sp-boot { padding: 3rem; text-align: center; color: var(--sp-muted); }
+#sp-outlet { min-height: 40vh; }
+.sp-conn-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:6px; background:#28a745; }
+.sp-conn-dot[data-state="reconnecting"] { background:#e0a800; }
+.sp-conn-dot[data-state="down"] { background:#dc3545; }
+#sp-toasts { z-index: 9500; padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+.sp-locked { max-width: 560px; margin: 4rem auto; text-align: center; }
+body.view-fullheight #sp-outlet { min-height: 100dvh; }

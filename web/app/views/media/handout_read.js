@@ -1,0 +1,115 @@
+// Page-turning PDF reader (templates/handout_read.html): chromeless route;
+// pdf.js + page-flip drive web/legacy/handout_reader.js. The PDF bytes come
+// from a signed URL in the page data (pdf.js fetches the file itself).
+import { html, render, raw } from '../../lib/dom.js';
+import { api } from '../../api.js';
+import { toast } from '../../ui/toast.js';
+import { loadScript } from '../../lib/loader.js';
+
+export const title = 'Handout';
+
+const STYLE = `<style>
+  #hr-root { position:fixed; inset:0; overflow:hidden; background:#1c1a17; color:#e8e2d6; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; z-index:50; }
+  #hr-root #bar { position:absolute; top:0; left:0; right:0; height:44px; display:flex; align-items:center; gap:10px; padding:0 12px; background:rgba(20,18,15,.92); border-bottom:1px solid #3a352d; z-index:20; font-size:.9em; transition:opacity .3s; }
+  #hr-root #bar.hidden { opacity:0; pointer-events:none; }
+  #hr-root #bar a { color:#e8e2d6; text-decoration:none; opacity:.85; }
+  #hr-root #bar a:hover { opacity:1; text-decoration:underline; }
+  #hr-root #bar .title { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+  #hr-root #bar button, #hr-root #bar input { background:#2b2822; color:#e8e2d6; border:1px solid #4a443a; border-radius:6px; padding:4px 9px; font:inherit; }
+  #hr-root #bar button:hover { background:#3a352d; cursor:pointer; }
+  #hr-root #bar button:disabled { opacity:.35; cursor:default; }
+  #hr-root #bar input[type=number] { width:64px; text-align:center; -moz-appearance:textfield; }
+  #hr-root #bar input::-webkit-outer-spin-button, #hr-root #bar input::-webkit-inner-spin-button { -webkit-appearance:none; }
+  #hr-root #bar .pages { white-space:nowrap; opacity:.8; }
+  #hr-root #bar #btnZoomReset { min-width:54px; }
+  #hr-root #stage { position:absolute; inset:44px 0 0 0; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none; overflow:hidden; }
+  body.chromeless #hr-root #stage { inset:0; }
+  #hr-root #stage.zoomed { cursor:grab; }
+  #hr-root #stage.zoomed.panning { cursor:grabbing; }
+  #hr-root #bookWrap { position:relative; transform-origin:50% 50%; }
+  #hr-root #book { position:relative; width:100%; min-width:0 !important; }
+  #hr-root #book .page { background:#f4efe4; overflow:hidden; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  #hr-root #book .page canvas { display:block; width:100%; height:100%; }
+  #hr-root #book .page[data-density="hard"] { background:#e9dfcc; }
+  #hr-root .stf__wrapper { margin:0 auto; }
+  #hr-root .stf__block { box-shadow:0 30px 60px rgba(0,0,0,.6); }
+  #hr-root #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:1.1em; opacity:.8; z-index:30; pointer-events:none; }
+  #hr-root #loading.done { display:none; }
+  #hr-root #toast { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); background:rgba(20,18,15,.9); padding:6px 14px; border-radius:8px; font-size:.85em; opacity:0; transition:opacity .3s; pointer-events:none; }
+  #hr-root #toast.show { opacity:1; }
+  #hr-root #book .page.marked::after { content:""; position:absolute; top:0; right:6%; width:4.5%; min-width:14px; max-width:34px; aspect-ratio:1/2.4; background:#b83a2c; z-index:5; pointer-events:none; clip-path:polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%); box-shadow:0 2px 4px rgba(0,0,0,.35); }
+  #hr-root #bar #btnBookmark.on { background:#6b2a22; border-color:#b83a2c; }
+  #hr-root #bar #btnMarks.on { background:#3a352d; }
+  #hr-root #marks { position:absolute; top:44px; right:0; bottom:0; width:min(340px, 92vw); background:rgba(28,26,23,.97); border-left:1px solid #3a352d; z-index:25; display:flex; flex-direction:column; transform:translateX(100%); transition:transform .25s; box-shadow:-10px 0 30px rgba(0,0,0,.4); }
+  #hr-root #marks.open { transform:none; }
+  body.chromeless #hr-root #marks { top:0; }
+  #hr-root #marks .hd { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid #3a352d; }
+  #hr-root #marks .hd h3 { margin:0; font-size:.95em; flex:1; }
+  #hr-root #marks .hd button, #hr-root #marks .add button { background:#2b2822; color:#e8e2d6; border:1px solid #4a443a; border-radius:6px; padding:3px 8px; font:inherit; cursor:pointer; }
+  #hr-root #marks .hd button:hover, #hr-root #marks .add button:hover { background:#3a352d; }
+  #hr-root #marks .add { display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid #3a352d; align-items:center; }
+  #hr-root #marks .add input { background:#1c1a17; color:#e8e2d6; border:1px solid #4a443a; border-radius:6px; padding:4px 8px; font:inherit; min-width:0; }
+  #hr-root #marks .add input[type=number] { width:60px; text-align:center; -moz-appearance:textfield; }
+  #hr-root #marks .add input[type=text] { flex:1; }
+  #hr-root #marks .add input::-webkit-outer-spin-button, #hr-root #marks .add input::-webkit-inner-spin-button { -webkit-appearance:none; }
+  #hr-root #marks .body { flex:1; overflow:auto; padding:6px 0 20px; font-size:.9em; }
+  #hr-root #marks h4 { margin:10px 12px 4px; font-size:.75em; text-transform:uppercase; letter-spacing:.06em; opacity:.6; }
+  #hr-root #marks .empty { padding:4px 12px 8px; opacity:.55; font-size:.85em; }
+  #hr-root #marks .row { display:flex; align-items:center; gap:6px; padding:4px 8px 4px 12px; cursor:pointer; }
+  #hr-root #marks .row:hover { background:rgba(255,255,255,.06); }
+  #hr-root #marks .row.cur { background:rgba(184,58,44,.22); }
+  #hr-root #marks .row .lbl { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #hr-root #marks .row .lbl input { width:100%; background:#1c1a17; color:#e8e2d6; border:1px solid #b83a2c; border-radius:4px; padding:2px 6px; font:inherit; }
+  #hr-root #marks .row .pg { opacity:.6; font-variant-numeric:tabular-nums; min-width:2.5em; text-align:right; }
+  #hr-root #marks .row .ico { opacity:.5; background:none; border:0; color:inherit; cursor:pointer; padding:0 4px; font:inherit; }
+  #hr-root #marks .row .ico:hover { opacity:1; }
+  #hr-root #marks .row.toc { padding-left:calc(12px + var(--d, 0) * 14px); }
+  #hr-root #marks .row.toc .lbl { white-space:normal; }
+  @media (max-width: 640px) { #hr-root #bar .pages, #hr-root #bar .lbl, #hr-root #bar #btnZoomReset { display:none; } }
+</style>`;
+
+function page(d) {
+  const h = d.handout;
+  return html`${raw(STYLE)}<div id="hr-root">
+<div id="bar">
+  <a href="/handouts" title="Back to Handouts">&larr; Handouts</a>
+  <span class="title">${h.title}</span>
+  <button id="btnFirst" title="First page (Home)">&#9198;</button>
+  <button id="btnPrev" title="Previous (←)">&#9664;</button>
+  <label class="lbl">Page <input type="number" id="pageInput" min="1" value="${d.start_page}"></label>
+  <span class="pages">of <span id="pageCount">?</span></span>
+  <button id="btnNext" title="Next (→)">&#9654;</button>
+  <button id="btnLast" title="Last page (End)">&#9197;</button>
+  <button id="btnZoomOut" title="Zoom out (&minus;)">&minus;</button>
+  <button id="btnZoomReset" title="Reset zoom (0)">100%</button>
+  <button id="btnZoomIn" title="Zoom in (+)">+</button>
+  <button id="btnSingle" title="Single page (S)">&#9647;</button>
+  <button id="btnBookmark" title="Bookmark this page (B)">&#128278;</button>
+  <button id="btnMarks" title="Bookmarks &amp; contents (M)">&#9776;</button>
+  <button id="btnFull" title="Fullscreen (F)">&#x26F6;</button></div>
+<aside id="marks" aria-label="Bookmarks and contents">
+  <div class="hd"><h3>Bookmarks</h3><button id="marksClose" title="Close (Esc)">&#10005;</button></div>
+  <form class="add" id="markAdd"><label>Page <input type="number" id="markPage" min="1" value="${d.start_page}"></label>
+    <input type="text" id="markLabel" placeholder="Label (optional)" maxlength="80"><button type="submit" title="Add bookmark">Add</button></form>
+  <div class="body"><h4>Your bookmarks</h4><div id="markList"></div><h4>Contents</h4><div id="tocList"><div class="empty">Reading the PDF's table of contents&hellip;</div></div></div></aside>
+<div id="stage"><div id="loading">Opening&hellip;</div><div id="bookWrap"><div id="book"></div></div></div>
+<div id="toast"></div></div>`;
+}
+
+export async function mount(outlet, ctx) {
+  const id = ctx.params.id;
+  const q = ctx.query.page ? `?page=${encodeURIComponent(ctx.query.page)}` : '';
+  const d = await api.get(`/api/v1/handouts/${id}${q}`);
+  if (d.redirect) { if (d.message) toast.warn(d.message); return ctx.navigate(d.redirect, { replace: true }); }
+  document.title = `${d.handout.title} — ScenePlay`;
+  render(outlet, page(d));
+  const [pdfjsLib, { HandoutReader }] = await Promise.all([
+    import('/vendor/pdfjs/pdf.min.mjs'), import('/legacy/handout_reader.js'), loadScript('/vendor/page-flip.browser.js')]);
+  if (ctx.signal.aborted) return;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+  const reader = new HandoutReader(pdfjsLib, {
+    url: d.file_url, progressUrl: d.progress_url, bookmarksUrl: d.bookmarks_url,
+    startPage: d.start_page, bookmarks: d.handout.bookmarks,
+  });
+  ctx.cleanup(() => { try { reader.destroy(); } catch (e) { console.error(e); } });
+}

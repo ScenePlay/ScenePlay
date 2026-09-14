@@ -1,0 +1,26 @@
+import { YES_NO, SCENE_ADDROW } from './_common.js';
+export default {
+  id: 'music', title: 'Music Media Table', primeKey: 'song_ID',
+  endpoints: { list: '/api/music', update: '/api/music', add: '/api/musicaddrow', del: '/api/musicdelrow' },
+  filters: { campaign: true, scene: true }, addRow: SCENE_ADDROW,
+  lookups: { status: { url: '/api/dnLoadStatus', id: 'status_ID', label: 'status' } },
+  cells: [
+    { id: 'song_ID', hidden: true },
+    { id: 'path', name: 'Path' },
+    { id: 'song', name: 'Name', cell: 'nameWithMeta', from: 'displayName' },
+    { id: 'pTimes', name: 'Played Times' },
+    { id: 'playedDTTM', name: 'Played DTTM' },
+    { id: 'active', name: 'Active', hidden: true, sort: false },
+    { id: 'genre', name: 'Genre', hidden: true, sort: false },
+    { id: 'que', name: 'Queued', cell: 'select', options: YES_NO },
+    { id: 'urlSource', name: 'URL Source', cell: 'link', sort: false },
+    { id: 'dnLoadStatus', name: 'Download Status', cell: 'badge', lookup: 'status', blank: true, errorFrom: 'dnLastError' },
+    { id: 'duration', name: 'Length', cell: 'duration' },
+    { id: 'uploader', name: 'Uploader' },
+    { id: 'artist', name: 'Artist', cell: 'text' },
+    { id: 'thumbnail', name: 'Info', cell: 'thumbInfo', mediaType: 'music', sort: false },
+    { cell: 'check' },
+    { id: 'dnLastError', hidden: true },
+    { id: 'displayName', hidden: true },
+  ],
+};

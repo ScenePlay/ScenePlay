@@ -1,0 +1,119 @@
+"""_StreamBuffer: the capture-side backlog that bridges relay outages."""
+import threading
+import time
+
+from integrations.relay_audio_stream import _StreamBuffer
+
+
+def test_fifo_order():
+    buf = _StreamBuffer(max_bytes=1000)
+    for b in (b'aa', b'bb', b'cc'):
+        buf.push(b)
+    assert [buf.pop(0.01) for _ in range(3)] == [b'aa', b'bb', b'cc']
+
+
+def test_pop_timeout_returns_none():
+    buf = _StreamBuffer(max_bytes=1000)
+    t0 = time.monotonic()
+    assert buf.pop(0.05) is None
+    assert time.monotonic() - t0 >= 0.04
+
+
+def test_overflow_drops_oldest():
+    buf = _StreamBuffer(max_bytes=10)
+    buf.push(b'11111')       # 5 bytes
+    buf.push(b'22222')       # 10 bytes total
+    buf.push(b'33333')       # over cap -> drop oldest
+    assert buf.pop(0.01) == b'22222'
+    assert buf.pop(0.01) == b'33333'
+    assert buf.pop(0.01) is None
+
+
+def test_overflow_always_keeps_newest():
+    buf = _StreamBuffer(max_bytes=4)
+    buf.push(b'oldpayload')
+    buf.push(b'newpayload')  # both exceed cap alone; newest must survive
+    assert buf.pop(0.01) == b'newpayload'
+
+
+def test_close_and_done():
+    buf = _StreamBuffer(max_bytes=100)
+    buf.push(b'tail')
+    buf.close()
+    assert not buf.done()            # closed but not drained
+    assert buf.pop(0.01) == b'tail'  # drains remaining data after close
+    assert buf.done()
+    assert buf.pop(0.01) is None
+
+
+def test_close_wakes_blocked_pop():
+    buf = _StreamBuffer(max_bytes=100)
+    result = {}
+    def popper():
+        result['v'] = buf.pop(timeout=5)
+    t = threading.Thread(target=popper)
+    t.start()
+    time.sleep(0.05)
+    buf.close()
+    t.join(timeout=1)
+    assert not t.is_alive()          # close() must not leave pop() waiting
+    assert result['v'] is None
+
+
+def test_producer_consumer_threads():
+    buf = _StreamBuffer(max_bytes=1_000_000)
+    chunks = [bytes([i % 256]) * 100 for i in range(200)]
+    def producer():
+        for c in chunks:
+            buf.push(c)
+        buf.close()
+    threading.Thread(target=producer).start()
+    got = []
+    while True:
+        c = buf.pop(0.5)
+        if c is None and buf.done():
+            break
+        if c is not None:
+            got.append(c)
+    assert got == chunks
+
+
+def test_size_tracks_bytes():
+    buf = _StreamBuffer(max_bytes=1000)
+    assert buf.size() == 0
+    buf.push(b'12345')
+    buf.push(b'678')
+    assert buf.size() == 8
+    buf.pop(0.01)
+    assert buf.size() == 3
+
+
+def test_chunks_batches_small_reads(monkeypatch):
+    import time as _time
+    import integrations.relay_audio_stream as ras
+    # keep the worker's idle check from tripping during the test
+    monkeypatch.setattr(ras, '_playing', True)
+    buf = ras._StreamBuffer(max_bytes=1_000_000)
+    pieces = [b'x' * 1024 for _ in range(12)]     # 12 KB of 1 KB reads
+    for p in pieces:
+        buf.push(p)
+    buf.close()
+    out = list(ras._chunks(buf, deadline=_time.monotonic() + 5))
+    assert b''.join(out) == b''.join(pieces)      # nothing lost or reordered
+    assert len(out) < len(pieces)                 # actually batched
+    assert all(len(c) >= ras._POST_BATCH for c in out[:-1])  # full batches first
+
+
+def test_profile_setting_validated(monkeypatch):
+    """relay_audio_profile: only 'low'/'smooth' reach the relay; anything
+    else (typo, old DB value) falls back to 'low'."""
+    import sql
+    import integrations.relay_audio_stream as ras
+    values = {}
+    monkeypatch.setattr(sql, 'appsettingGet',
+                        lambda name, default='': values.get(name, default))
+    assert ras._profile() == 'low'                 # unset -> default low
+    values['relay_audio_profile'] = 'smooth'
+    assert ras._profile() == 'smooth'
+    values['relay_audio_profile'] = 'bogus'
+    assert ras._profile() == 'low'

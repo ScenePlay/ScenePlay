@@ -1,0 +1,217 @@
+"""3D texture library endpoints (ported from routes/textures.py).
+
+One unified library from two sources:
+  - built-in: repo files under static/textures/builtin/ + manifest.json
+    (CC0 starter set, never deletable)
+  - user-added: rows in tblTextures + files under static/uploads/textures/
+    (AI prompt paste-backs and uploads)
+
+/manifest serves the union; floorplan JSON references textures by slug
+`name`. Reads need a login (players' 3D viewers resolve textures too);
+writes are DM-only."""
+import json
+import os
+import re
+
+from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import JSONResponse
+
+import core.config as config
+from core.db import db
+from models.ttrpg import tblTextures
+from routers._util import _now, form_or_json
+from security.deps import require_dm, require_user
+from core.urls import static_url
+
+router = APIRouter(prefix='/ttrpg/textures')
+
+UPLOAD_FOLDER = os.path.join(config.UPLOADS_DIR, 'textures')
+BUILTIN_FOLDER = os.path.join(config.STATIC_DIR, 'textures', 'builtin')
+
+SLUG_RE = re.compile(r'^[a-z0-9_-]{1,64}$')
+CATEGORIES = ('stone', 'brick', 'wood', 'floor', 'plaster', 'metal',
+              'ground', 'other')
+TILE_FT_RANGE = (1.0, 50.0)
+# Tiling surface detail: 1024px on a ~5 ft tile is plenty at eye level and
+# keeps the relay push (which re-encodes smaller still) cheap.
+MAX_TEXTURE_DIM = 1024
+
+
+def _builtin_manifest():
+    """The repo starter set, or [] when the folder is missing (fresh trees
+    before assets sync, tests)."""
+    path = os.path.join(BUILTIN_FOLDER, 'manifest.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            entries = json.load(f)
+    except (OSError, ValueError):
+        return []
+    out = []
+    for e in entries:
+        name = str(e.get('name', ''))
+        if not SLUG_RE.match(name):
+            continue
+        out.append({
+            'name': name,
+            'category': str(e.get('category', 'other')),
+            'tile_ft': float(e.get('tile_ft', 5)),
+            'tags': str(e.get('tags', '')),
+            'source': 'builtin',
+            'url': static_url(f'textures/builtin/{name}.jpg'),
+        })
+    return out
+
+
+def _db_manifest():
+    out = []
+    for t in tblTextures.query.order_by(tblTextures.category,
+                                        tblTextures.name).all():
+        out.append({
+            'name': t.name,
+            'category': t.category,
+            'tile_ft': t.tile_ft,
+            'tags': '',
+            'source': t.source,
+            'url': static_url(f'uploads/textures/{t.filename}'),
+        })
+    return out
+
+
+def texture_manifest():
+    """Union of builtin + user textures (builtin wins name collisions —
+    uploads are blocked from taking builtin names, so a clash means a
+    builtin was added later; the shipped file is the stable one)."""
+    seen = set()
+    out = []
+    for entry in _builtin_manifest() + _db_manifest():
+        if entry['name'] in seen:
+            continue
+        seen.add(entry['name'])
+        out.append(entry)
+    return out
+
+
+def texture_names():
+    """Just the referenceable slugs, for prompt catalogs and validation."""
+    return [e['name'] for e in texture_manifest()]
+
+
+def texture_paths(names):
+    """{name: {'path': abs_file_path, 'tile_ft': f}} for the given slugs —
+    the relay broadcaster embeds these files for remote 3D viewers."""
+    out = {}
+    wanted = set(names)
+    if not wanted:
+        return out
+    for e in _builtin_manifest():
+        if e['name'] in wanted:
+            out[e['name']] = {'path': os.path.join(BUILTIN_FOLDER, e['name'] + '.jpg'),
+                              'tile_ft': e['tile_ft']}
+    for t in tblTextures.query.filter(tblTextures.name.in_(wanted)).all():
+        out.setdefault(t.name, {'path': os.path.join(UPLOAD_FOLDER, t.filename),
+                                'tile_ft': t.tile_ft})
+    return out
+
+
+@router.get('/manifest')
+def manifest(user=Depends(require_user)):
+    return {'ok': True, 'textures': texture_manifest()}
+
+
+def _existing_names():
+    names = {e['name'] for e in _builtin_manifest()}
+    names.update(t.name for t in tblTextures.query.all())
+    return names
+
+
+def _save_texture_image(raw, orig_ext):
+    """Downscale to MAX_TEXTURE_DIM and save under a uuid filename.
+    Returns the filename."""
+    import uuid
+    from integrations.relay_broadcaster import _downscale_image
+    out, ext = _downscale_image(raw, orig_ext, MAX_TEXTURE_DIM)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    filename = f'{uuid.uuid4().hex}.{ext}'
+    with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as f:
+        f.write(out)
+    return filename
+
+
+def _validate_texture_name(form):
+    """(name, error) — the slug rules and the collision check, shared by the
+    save paths and the AI flow (which checks BEFORE spending a generation)."""
+    name = str(form.get('name', '') or '').strip().lower().replace(' ', '_')
+    if not SLUG_RE.match(name):
+        return name, 'name must be 1-64 chars: a-z 0-9 _ -'
+    if name in _existing_names():
+        return name, f'a texture named "{name}" already exists'
+    return name, None
+
+
+def _add_texture(raw, orig_ext, form):
+    """Shared by upload and clipboard paste. Returns (payload, status)."""
+    name, err = _validate_texture_name(form)
+    if err:
+        return {'ok': False, 'error': err}, 400
+    category = str(form.get('category', 'other') or 'other').strip().lower()
+    if category not in CATEGORIES:
+        category = 'other'
+    try:
+        tile_ft = float(form.get('tile_ft', 5) or 5)
+    except (TypeError, ValueError):
+        tile_ft = 5.0
+    tile_ft = max(TILE_FT_RANGE[0], min(TILE_FT_RANGE[1], tile_ft))
+    source = 'ai' if form.get('source') == 'ai' else 'upload'
+    if not raw:
+        return {'ok': False, 'error': 'empty image'}, 400
+    filename = _save_texture_image(raw, orig_ext)
+    row = tblTextures(name=name, category=category, source=source,
+                      filename=filename, tile_ft=tile_ft, created_at=_now())
+    db.session.add(row)
+    db.session.commit()
+    return {'ok': True, 'name': name,
+            'url': static_url(f'uploads/textures/{filename}')}, 200
+
+
+def _reply(payload, status):
+    return payload if status == 200 else JSONResponse(payload, status_code=status)
+
+
+@router.post('/upload')
+def upload(form: dict = Depends(form_or_json), image: UploadFile = File(None), user=Depends(require_dm)):
+    if image is None or not image.filename:
+        return JSONResponse({'ok': False, 'error': 'no image file'}, status_code=400)
+    ext = (image.filename.rsplit('.', 1)[-1].lower()
+           if '.' in image.filename else 'png')
+    payload, status = _add_texture(image.file.read(), ext, form)
+    return _reply(payload, status)
+
+
+@router.post('/paste')
+def paste(form: dict = Depends(form_or_json), image: UploadFile = File(None), user=Depends(require_dm)):
+    """Clipboard flow (the AI-generate tab): raw image bytes in 'image',
+    metadata in the form — same contract as battlemap bg-paste."""
+    if image is None:
+        return JSONResponse({'ok': False, 'error': 'no image data'}, status_code=400)
+    ext = str(form.get('ext', 'png') or 'png').lower()
+    if ext not in ('png', 'jpg', 'jpeg', 'webp'):
+        ext = 'png'
+    payload, status = _add_texture(image.file.read(), ext, form)
+    return _reply(payload, status)
+
+
+@router.post('/{name}/delete')
+def delete(name: str, user=Depends(require_dm)):
+    row = tblTextures.query.filter_by(name=name).first()
+    if row is None:
+        # builtin names land here too — they have no DB row and never delete
+        return JSONResponse({'ok': False, 'error': 'not a deletable texture'}, status_code=404)
+    path = os.path.join(UPLOAD_FOLDER, row.filename)
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
+    db.session.delete(row)
+    db.session.commit()
+    return {'ok': True}

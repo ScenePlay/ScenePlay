@@ -1,0 +1,148 @@
+"""Playlist-expansion worker.
+
+Polls tblPlaylistQueue, runs `yt-dlp --flat-playlist -J` to list a playlist's
+entries WITHOUT downloading each, and funnels every live entry through the
+shared enqueue_single() intake (so dedup applies per entry). Dead entries
+(private/deleted) are skipped rather than enqueued as guaranteed failures.
+
+Like meta_que, classification never trusts subprocess return codes (the app's
+SIGCHLD reaper eats them) — success == stdout parses to JSON with entries.
+"""
+
+import os
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+
+from sql import (select_Playlist_Que_Next, update_playlist_status, enqueue_single,
+                 appsettingFlagGet, appsettingFlagUpdate, playlist_pending_any)
+from media.ytid import canonical_watch_url
+
+_START_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+# pip-installed yt-dlp run as a module — no bash / no repo checkout, works on
+# both OSes. Same JSON-on-stdout contract as the old yt-dlp.sh wrapper.
+import media.ytdlp_source as ytdlp_source
+
+_YTDLP_CMD = [sys.executable, '-m', 'yt_dlp']
+# Suppress the console window each spawn would pop on Windows (0 is a no-op
+# elsewhere — POSIX requires creationflags=0).
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
+MAX_RETRIES = 3
+POLL_SECONDS = 2
+EXPAND_TIMEOUT = 180
+
+# flat-playlist marks unwatchable entries by these availability/title flags.
+_DEAD_TITLES = ('[private video]', '[deleted video]', '[unavailable video]')
+
+
+def _entry_is_dead(entry):
+    avail = (entry.get('availability') or '').lower()
+    if avail in ('private', 'needs_auth', 'unlisted') and not entry.get('id'):
+        return True
+    title = (entry.get('title') or '').lower()
+    return title in _DEAD_TITLES
+
+
+def expand_playlist(url):
+    """Return ('ok', [entries]) | ('transient', err). Each entry is the raw
+    flat-playlist dict; callers use entry['id']."""
+    try:
+        proc = subprocess.run(
+            _YTDLP_CMD + ['--flat-playlist', '-J', '--no-warnings', url],
+            capture_output=True, text=True, timeout=EXPAND_TIMEOUT,
+            creationflags=_NO_WINDOW, env=ytdlp_source.popen_env())
+    except subprocess.TimeoutExpired:
+        return 'transient', 'playlist expansion timed out'
+    except Exception as e:  # pragma: no cover
+        return 'transient', f'spawn failed: {e}'
+
+    out = (proc.stdout or '').strip()
+    if out:
+        try:
+            info = json.loads(out)
+            if isinstance(info, dict):
+                entries = info.get('entries') or []
+                # carry the playlist title along on the list for the origin stamp
+                try:
+                    entries = list(entries)
+                    entries.playlist_title = info.get('title') or ''    # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                return 'ok', entries
+        except ValueError:
+            pass
+    return 'transient', (proc.stderr or 'no output').strip()[:500]
+
+
+def _handle_job(playlist_id, url, media_type, scene_ID, retry_count):
+    update_playlist_status(playlist_id, 2)   # Processing
+    try:
+        _run_job(playlist_id, url, media_type, scene_ID, retry_count)
+    except Exception:
+        # Don't strand the job at status 2 (select_Playlist_Que_Next only picks
+        # status 1); re-queue it. App boot also sweeps 2→1 for hard crashes.
+        update_playlist_status(playlist_id, 1)
+        raise
+
+
+def _run_job(playlist_id, url, media_type, scene_ID, retry_count):
+    status, payload = expand_playlist(url)
+
+    if status != 'ok':
+        new_retries = (retry_count or 0) + 1
+        if new_retries < MAX_RETRIES:
+            # Exponential backoff (2/4 min, mirroring meta_que) — without it the
+            # 3 retries burn ~2s apart and one network blip kills the whole job.
+            backoff = datetime.utcnow() + timedelta(minutes=2 ** new_retries)
+            update_playlist_status(playlist_id, 1, retry_count=new_retries, last_error=payload,
+                                   next_retry=backoff.strftime('%Y-%m-%d %H:%M:%S'))
+        else:
+            update_playlist_status(playlist_id, 4, retry_count=new_retries, last_error=payload)
+        return
+
+    mediaType = 'mp3' if media_type == 'music' else 'mp4'
+    added = 0
+    for entry in payload:
+        if _entry_is_dead(entry):
+            continue
+        vid = entry.get('id')
+        if not vid:
+            continue
+        try:
+            pk, _created, _msg = enqueue_single(canonical_watch_url(vid), mediaType, scene_ID)
+            added += 1
+            # Playlist of origin (media_facets grouping) — best effort.
+            if pk:
+                try:
+                    from sql import set_media_origin
+                    set_media_origin(media_type, pk, url, getattr(payload, 'playlist_title', ''))
+                except Exception:
+                    pass
+        except Exception as e:      # a single bad entry must not abort the batch
+            print('[playlist_que] entry error:', vid, e)
+    update_playlist_status(playlist_id, 3, last_error=f'expanded {added} entries')
+
+
+def PlaylistQue_threader():
+    while True:
+        time.sleep(POLL_SECONDS)
+        if os.getppid() == 1:
+            break
+        try:
+            if str(appsettingFlagGet('playlist_que_switch') or '0') != '1':
+                continue
+            jobs = select_Playlist_Que_Next()
+            if not jobs:
+                # Only go idle when nothing is pending at all — the selector
+                # excludes jobs in retry backoff, and switching off would
+                # strand them (see meta_que).
+                if not playlist_pending_any():
+                    appsettingFlagUpdate('playlist_que_switch', 0)
+                continue
+            playlist_id, url, media_type, scene_ID, retry_count = jobs[0]
+            _handle_job(playlist_id, url, media_type, scene_ID, retry_count or 0)
+        except Exception as e:
+            print('[playlist_que] iteration error:', e)

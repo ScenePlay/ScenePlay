@@ -1,0 +1,484 @@
+# ScenePlay
+
+ScenePlay is a self-hosted atmosphere controller for tabletop gaming. One box
+— a Raspberry Pi, any Linux machine, **or a Windows PC** — plays music, shows
+video on a screen, drives LED lighting, and runs a full TTRPG toolkit —
+characters, battle maps, monsters — all controlled from any browser on your
+network (phone, tablet, laptop). A Dungeon Master presses one Scene button
+and the room changes: tavern music starts, a fireplace video plays, the LEDs
+go warm orange.
+
+**Runs where you already are:** the Raspberry Pi is the classic always-on
+game-room box, but the same one-click installer experience exists for
+**Windows** — double-click `install.bat` on any Windows 10/11 PC and your
+gaming laptop becomes the server, perfect as a second box or for game night
+at someone else's house. The only difference: Pi-wired LED strips need a Pi
+(network WLED controllers work everywhere).
+
+FastAPI + SQLite on the box and a single-page app (plain ES modules, no build
+step) in the browser — no cloud dependencies. Live updates arrive over
+Server-Sent Events. Media comes from YouTube via yt-dlp and is stored locally,
+so game night doesn't depend on anyone's streaming account.
+
+> **Upgrading from ScenePlay 1.x (the Flask version)?** Same database, same
+> secrets, same port — follow [docs/CUTOVER.md](docs/CUTOVER.md). Everyone logs
+> in once afterwards (sessions became tokens), and nginx needs the small
+> `/api/v1/events` block from `supportFiles/default.txt`.
+
+> **About the content you import:** downloading and self-hosting media is
+> meant for **your own content** — videos and music you created, own the
+> rights to, or otherwise have permission to store (e.g. your own uploads or
+> appropriately licensed material). Downloading other people's content may
+> violate YouTube's Terms of Service and copyright law; that responsibility
+> sits with you, the user.
+
+---
+
+## Installation
+
+### Linux / Raspberry Pi — step by step
+
+Works on Raspberry Pi OS and Debian/Mint-family Linux. You'll need the
+computer connected to your home network and to the internet, and about 30
+minutes (most of it is the installer downloading things by itself).
+
+**Step 0 — set up the computer itself** (skip if you already have a working
+Linux desktop). For a brand-new Raspberry Pi (model 3 or newer, with a
+microSD card):
+
+1. On any other computer, install **Raspberry Pi Imager** from
+   <https://www.raspberrypi.com/software/> and put the microSD card in.
+2. In the Imager pick your Pi model, choose **Raspberry Pi OS (64-bit)** as
+   the operating system, and select the card.
+3. When it asks to **edit settings**, say yes — this is the important part:
+   set a username and password (write them down), enter your Wi-Fi name and
+   password (not needed if you'll use a network cable), and under
+   **Services** turn on **SSH**. These settings are what let you control the
+   Pi from your normal computer later.
+4. Write the card, put it in the Pi, plug in power, and give it two or three
+   minutes to start the first time.
+
+You can now either work directly on the Pi (screen + keyboard) or from
+another computer with `ssh <username>@raspberrypi.local` — either way, the
+next steps are identical.
+
+**Step 1 — open a Terminal.** On the Pi's desktop it's the black-screen icon
+in the taskbar (or Menu → Accessories → Terminal). Everything below is typed
+(or better: copy-pasted) into that window, one block at a time, pressing
+Enter after each. If a command asks for your password, type it — nothing
+appears while you type; that's normal — and press Enter.
+
+**Step 2 — one-time permission setup.** The media players and LED support
+need to run small system commands without stopping to ask for a password
+every time. Type:
+
+```bash
+sudo visudo
+```
+
+A text editor opens. Use the arrow keys to go to the bottom and add this line,
+replacing `sammy` with your username (it's shown in the prompt, e.g.
+`sammy@raspberrypi`):
+
+```
+sammy  ALL=(ALL) NOPASSWD:ALL
+```
+
+Then save and exit: press **Ctrl+X**, then **Y**, then **Enter**.
+
+**Step 3 — download ScenePlay.** Copy-paste this whole block:
+
+```bash
+sudo apt-get update && sudo apt-get -y upgrade
+cd ~
+git clone https://github.com/ScenePlay/ScenePlay_Flask_Media_Wrapper ScenePlay
+```
+
+(The folder must be called `ScenePlay` in your home folder — the scripts
+assume that location.)
+
+**Step 4 — run the installer.** Copy-paste:
+
+```bash
+cd ~/ScenePlay
+chmod +x requirements.sh
+./requirements.sh
+```
+
+This installs everything (media players, Python packages, LED libraries on a
+Pi) and sets ScenePlay to **start automatically every time the computer
+boots**. It prints a lot of text and can take 10–20 minutes on a Pi — that's
+normal. When it finishes, reboot once:
+
+```bash
+sudo reboot
+```
+
+**Step 5 — open ScenePlay.** Find the server's address by typing
+`hostname -I` in the Terminal — the first number (like `192.168.1.50`) is it.
+On any phone, tablet or computer **on the same network**, open a browser and
+go to:
+
+```
+http://192.168.1.50           ← your number instead
+```
+
+No port number needed: the installer sets up nginx to serve ScenePlay on the
+normal web port. (If the plain address doesn't respond, try
+`http://192.168.1.50:8086` — the app itself always listens there, with or
+without nginx.)
+
+That's it. The database and default data create themselves on first start.
+
+**Everyday facts:** it starts itself on every boot — you never need to
+"launch" it. To start it by hand after stopping it: `~/ScenePlay/startApp.sh`.
+**Updating:** the Utilities page has a **Software Update** card — it tells
+you when a new version is available and updates with one click (safety
+backup first, then restart; DM login required). Before any update, create a
+backup and **download it to another computer** (Utilities → Backup &
+Restore) — the automatic safety backup stays on the box itself, and a copy
+elsewhere protects your characters, scenes and maps against anything.
+Terminal equivalent:
+`git -C ~/ScenePlay stash && git -C ~/ScenePlay pull`, then reboot.
+(Developers: `./startLocal.sh` runs from a working copy, or
+`python3 app.py -flask` for Flask's dev server.)
+
+### Windows — step by step (second / travel server)
+
+Any normal Windows 10 or 11 PC works — no preparation needed. Everything
+works on Windows except LED strips wired directly to a Raspberry Pi (network
+WLED controllers still work fine).
+
+**Step 1 — download ScenePlay.** Easiest: on the GitHub page press the green
+**Code** button → **Download ZIP**, then right-click the downloaded file →
+**Extract All…** and put the folder somewhere permanent (e.g. `C:\ScenePlay`
+or your Documents — not the Downloads folder). If you know git, a
+`git clone` works too and makes updating easier.
+
+**Step 2 — run the installer.** Open the ScenePlay folder and double-click
+**`install.bat`**. A black window opens and installs Python, mpv and ffmpeg
+for you, then the Python packages.
+
+- If Windows shows a blue "Windows protected your PC" box, click
+  **More info → Run anyway**.
+- If the window says it installed new tools and asks you to **run it again**:
+  close the window and double-click `install.bat` once more — the second run
+  finishes the setup. (New tools only become visible to new windows.)
+- At the end it offers a **desktop shortcut** and **start automatically at
+  login** — say Yes to both if you want the one-click experience.
+- The installer uses **winget** (built into Windows 10/11) or **Chocolatey**
+  — whichever your PC has. If it says neither is available: install
+  **"App Installer"** from the Microsoft Store (easiest), or Chocolatey from
+  <https://chocolatey.org/install>, then re-run. (With Chocolatey, run
+  `install.bat` by right-click → **Run as administrator** — Chocolatey
+  requires it.)
+
+**Step 3 — start it.** Double-click **`startApp.bat`** (or the desktop
+shortcut). Keep the black window open — that IS the server. The first time,
+Windows Firewall may ask about Python: click **Allow access**, otherwise
+phones and tablets won't be able to reach it.
+
+**Step 4 — open ScenePlay.** On the same computer: `http://localhost:8086`.
+From a phone or tablet on the same network: `http://<the PC's address>:8086`
+(find the address with `ipconfig` in a command window — the "IPv4 Address"
+line).
+
+**Manual checklist** (what install.bat automates, for the curious):
+
+1. Install **Python 3.12** (check "Add to PATH").
+2. Install the players/tools (must end up on PATH):
+   `winget install mpv` and `winget install Gyan.FFmpeg`
+   — or with Chocolatey (admin prompt): `choco install -y python312 mpv ffmpeg`
+3. From the repo folder — note the venv MUST be named `.venv-win`
+   (`startApp.bat` looks for it there; plain `.venv` is reserved for the
+   Linux venv when the folder lives on a shared drive):
+   `python -m venv .venv-win && .venv-win\Scripts\pip install -r requirements.txt`
+   (the requirements file picks the right per-OS packages automatically).
+4. Run `startApp.bat` → open `http://localhost:8086`.
+5. Optional autostart:
+   `schtasks /create /sc onlogon /tn ScenePlay /tr "C:\path\to\startApp.bat"`
+
+Scheduled jobs on Windows install into **Task Scheduler** (the Apply button /
+wizard handle it); schedules the wizard creates map exactly, hand-written
+cron patterns that Task Scheduler can't express are skipped with a count.
+
+### Uninstalling
+
+- **Linux / Raspberry Pi:** run `./uninstall.sh` from `~/ScenePlay`. It stops
+  the app and watchdog, removes the autostart entries and restores the stock
+  nginx config, then **asks** before touching anything shared (nginx, the apt
+  tools) or deleting the folder — `ScenePlay.db` and your downloaded media
+  live in that folder, so nothing of yours is deleted without a prompt.
+- **Windows:** double-click `uninstall.bat`. It stops the app, removes the
+  autostart task, desktop shortcut, firewall rules and `.venv-win`, and asks
+  before removing shared tools (mpv, ffmpeg, Python). The folder itself —
+  with your database and media — is left for you to delete manually.
+
+---
+
+## Feature Tour
+
+### Scenes — the core idea
+A **Scene** bundles media and lighting into one button: any number of songs,
+videos (with per-scene volume, screen, ordering and loops), an RPiLED pattern,
+and WLED presets. Activating a scene stops what's playing, queues that scene's
+media, and applies its lighting. Scenes group into **Campaigns** so the scene
+list only shows what belongs to tonight's game.
+
+### The player bar (top of every page)
+- **Master volume** slider (system-wide, live).
+- **Now Playing** — active scene, current song and video with thumbnails.
+  Hover a thumbnail for full metadata (uploader, length, views, description);
+  click it for the detail card.
+- **Transport controls for both players** — seek back / pause / seek forward /
+  next, independently for music and video.
+- **Queue counts with total remaining time** (e.g. `Songs: 12 (1h 47m)`),
+  computed from extracted metadata.
+- **All Stop** — kills both players and clears the scene. The **Music Ignore
+  Stop** toggle lets music survive an All Stop (useful when switching maps but
+  keeping the tavern playlist going).
+
+### Media library & YouTube import
+*Import your own content — see the note at the top of this file.*
+- **Import** a video or a whole playlist by URL — from the Utilities page or
+  the browser extensions (below). Playlists expand in the background,
+  entry-by-entry, skipping private/deleted videos.
+- **Video-id dedup** — the same video imported twice (any URL form: `watch?v=`,
+  `youtu.be/`, shorts, share-links with `&list=`) resolves to ONE row and one
+  file on disk, shared across scenes. Re-adding a known video just links it to
+  the new scene.
+- **Download queue** — yt-dlp fetches audio as MP3 or video as 720p MP4 into
+  `~/Music/SP/` / `~/Videos/SP/`, one at a time, with status per row.
+- **Metadata queue** — a second worker extracts title, duration, uploader,
+  thumbnail, view count and description for every imported item (no extra
+  download). Display names fill in automatically; a typed name always wins.
+  Failures retry with exponential backoff; permanently unavailable videos are
+  marked and never retried. Re-queuing a download also retries its metadata.
+- **Media tables** — sortable/searchable tables for music and video showing
+  name, play stats, queue state, download status, length, uploader and a
+  thumbnail that opens the full metadata card.
+
+### Players
+Two independent `mpv` instances — one audio-only for music, one fullscreen for
+video — each with its own IPC socket, so music and video mix freely and
+transport commands (and kills) target exactly one player. Volume is passed
+per-item from the scene link settings.
+
+### LED lighting
+- **RPiLED** — WS281x strips driven directly from the Pi: 23 built-in
+  patterns assigned per scene via Scene RPiLED, each edited with only the
+  settings it actually uses (colors, speed, duration, direction, brightness…).
+  A scene's rows play in order and repeat until the scene changes; rows that
+  share an order play in random order each pass.
+- **Lights off at scene end** — when a scene's last song and video have
+  played, every light (RPiLED, Remote boxes, WLED, remote players') goes
+  dark. Utilities → Lighting turns this off; scenes with no media are never
+  affected.
+  LED Config holds the strip's pin, pixel count and **max brightness** — a
+  hardware cap that keeps colors true to the far end of a long strip.
+- **WLED** — network WLED controllers: per-scene effect, palette, colors,
+  speed and brightness (Scene WLED table). Multiple controllers supported via
+  the Servers table.
+
+### TTRPG toolkit (`/ttrpg`)
+Login-based, with DM and player roles.
+- **Characters** — full sheets: HP/AC/stats, skills, inventory, notes, feats,
+  armor, weapons, spells, custom resources, conditions, portraits (upload or
+  paste). Players manage their own; the DM sees all.
+- **Battle maps** — grid maps with a background image (upload or paste),
+  drag-and-drop tokens for party and monsters, HP tracking from the sidebar,
+  map effects, movement scale, and multiple maps per session with ordering.
+  The DM sidebar includes the campaign's **Scenes** (with live now-playing
+  pills and volume) so atmosphere control never leaves the map screen.
+- **AI map & asset maker (built-in LLM prompt writer)** — making new map
+  images and assets is a copy-paste job: the map manager has a prompt
+  builder where you pick the genre, environment, time of day, weather,
+  lighting, art style and effects (fire, water, fog, magic), add free-text
+  details, and hit **Generate Prompt**. Copy the result into your favorite
+  AI image or video generator (ChatGPT, Midjourney, Sora, whatever you
+  use), then copy the generated picture and hit **Paste as Background** —
+  it lands straight on the map, no files to save or upload. The prompts are
+  engineered for TTRPG use: strictly top-down (so the square grid lines
+  up), **travel-map mode** with a real distance scale for overland journeys,
+  and **live-map mode** that writes a seamlessly-looping *video* prompt for
+  animated backgrounds. Matching prompt writers exist for **homebrew
+  monster / vehicle token art** and character portraits.
+- **Monsters** — library plus homebrew, with per-session instances.
+- **Custom content (homebrew)** — every reference library page has a
+  **“+ Custom …”** button (DM login required): open *Reference → Weapons /
+  Spells / Classes / Subclasses / Armor / Feats / Skills / Races /
+  Equipment*, click it, fill the form, and the entry joins the library
+  marked **Custom** — immediately usable on character sheets, pickers and
+  monster stat blocks alongside the official SRD entries. Custom rows are
+  first-class citizens: they survive library clears and re-syncs (only
+  API-synced rows are replaced), they travel in backups, and they **merge
+  between servers** (Import → Merge folds a friend's custom classes,
+  weapons, subclass features and monsters into your library, deduped by
+  name).
+- **Reference libraries** — synced from dnd5eapi.co: spells, weapons, armor,
+  equipment, feats, skills, races, classes, monsters, plus conditions (full
+  rule text), magic items, class features, per-level class tables (spell
+  slots, rages, ki…), subclasses, racial traits, weapon properties and the
+  SRD rules chapters. The **Merged** API mode reads the 2024 SRD first and
+  fills everything it doesn't have yet from 2014. Character sheets use them
+  live: condition badges show full rules, the Reference tab lists your
+  class's features for your level, and *Suggest from class* fills in spell
+  slot / class counter resources automatically.
+- **Remote play relay** (optional) — a companion portal (`ScenePlayRemote`)
+  lets remote players see maps, rolls and characters. The local server is the
+  authority; the relay only stages changes for the local box to pick up.
+  **Home lighting for remote players** (their own WLED / Pi strips reacting
+  to your scenes) has a browser limitation to know about: an HTTPS-hosted
+  portal (e.g. on Render) is **blocked from talking to HTTP devices on the
+  player's LAN** — browsers treat it as mixed content (Firefox/Safari refuse
+  outright; Chrome/Edge only allow it behind a permission prompt). Two ways
+  around it: the **WLED-over-MQTT bridge** (*beta* — works in every browser;
+  setup guide in `docs/MQTT_LIGHTING.md`), or **self-hosting the relay over
+  plain HTTP** on a box you control, since an HTTP page may call HTTP
+  devices. Browser-direct WLED control is the current, supported
+  implementation — it just needs the HTTP-hosted relay (or a Chrome/Edge
+  permission) because of the mixed-content rule above. Maps, rolls,
+  characters and music are unaffected — this only concerns player-side
+  lighting.
+
+### Multi-server & discovery
+`GET /api/server-info` fingerprints a ScenePlay box (name, version,
+capabilities). *Utilities → Ping Network* scans the LAN for other ScenePlay
+servers and WLED devices and fills the Servers table.
+
+### Backup, export & import
+Backups are light archives — database snapshot plus uploaded images (portraits,
+map backgrounds), **not** the media files: every media row keeps its YouTube
+URL, so a restore re-queues missing downloads through the normal pipeline.
+The D&D reference content is fully covered the same way: your **custom
+(homebrew) entries are in the backup**, while the official SRD entries are
+deliberately left out — every box re-downloads those from the D&D API
+(*Reference → Sync All*) — so a restore on a fresh machine rebuilds the
+complete library: SRD from the API, homebrew from the archive, media from
+YouTube.
+- **Create Backup** on the Utilities page (download/delete from the list
+  there), or enable the **nightly automatic snapshot** (keeps the last 7).
+- **Import → Replace** — full restore for disaster recovery or moving to a new
+  box. A safety snapshot of the current state is taken first, media paths are
+  rewritten for the new machine, and missing files re-download automatically.
+- **Import → Merge** — share content between servers: the archive's campaigns,
+  scenes, media and scene-links fold into the live library, deduped by video
+  id and by name (scenes/campaigns/genres). Metadata rides along; new media
+  queues for download. **Homebrew** reference-library entries (custom feats,
+  weapons, spells, subclasses + features, monsters…) merge too, deduped by
+  name — SRD rows don't (each box re-syncs those from the D&D API). LED
+  patterns, characters/sessions/maps and server rows are box-specific and
+  only move with Replace.
+
+### Utilities page
+YouTube import form, **Backfill Metadata** (tags legacy rows with video ids
+and queues them for metadata), **Backup &amp; Restore**, browser-extension
+downloads, and computer restart. (The network scan lives on the Servers page.)
+
+### Table management
+Every data table (Scenes, Scene Music/Video/RPiLED/WLED, Music/Video Media,
+Campaigns, LED Config, Servers, Cron Schedules) is browser
+-editable, with multi-select checkbox delete — select across pages, one
+confirm, done. Scene tables pick media through a searchable picker with
+thumbnails and durations.
+
+### Cron schedules
+Schedule scene activations by time (e.g. lights on at dusk) via the Cron
+Schedules table.
+
+---
+
+## Browser extensions (the fast way to import)
+
+While watching any YouTube video, click the ScenePlay extension: it shows the
+saved server, a media-type pick (MP3/MP4), the scene to attach to, and Send.
+If the video is part of a playlist it asks whether you meant the single video
+or the whole playlist. The server address needs no `http://` — `192.168.1.50:8086`
+works — and Save runs a connection test.
+
+- **Firefox**: download **ScenePlay for Firefox (signed)** from Utilities —
+  a Mozilla-signed AMO build (`static/ext/ScenePlay-firefox-signed.xpi`,
+  committed to the repo) that installs permanently on regular Firefox with
+  one click. The unsigned `ScenePlay-firefox.xpi` remains for development
+  (ESR / Developer Edition / Nightly with
+  `xpinstall.signatures.required=false`).
+- **Chrome**: `chrome://extensions` → Developer mode → *Load unpacked* →
+  select `ChromeExt/`. (Or download `ScenePlay-chrome.zip` from Utilities.)
+
+Rebuild the unsigned downloadable packages after changing extension code:
+`make ext`. After a code change, re-sign for release Firefox with the free
+Mozilla flow (`web-ext sign --channel=unlisted` with an addons.mozilla.org
+API key — bump `version` in `FireFoxExt/manifest.json` first; AMO rejects
+re-submitting an already-signed version number), then replace
+`static/ext/ScenePlay-firefox-signed.xpi` with the new signed build.
+
+---
+
+## Development
+
+```bash
+make check     # ruff lint + pytest
+make test      # pytest only
+make dev       # dev instance on :8086 (no workers/integrations/cron) — see docs/DEV_SERVER.md
+make parity    # GET-parity diff against a running 1.x instance (scripts/parity.py)
+make drill     # schema drill: fresh DB here == the pinned 1.x schema
+make ext       # package browser extensions into static/ext/
+make sync-assets  # copy web/shared/* to the remote portal repo
+```
+
+`docs/PORTING_GUIDE.md` (how each Flask blueprint/page maps onto a router + SPA view),
+`docs/PORT_CONTRACTS.md` (every URL an outside consumer relies on) and `docs/CUTOVER.md`
+(moving a box from 1.x) are the port's reference documents.
+
+Layout, briefly:
+
+| Path | What |
+|---|---|
+| `ws.py` / `app.py` | Entry point (schema sync, forked workers, uvicorn on :8086) and the FastAPI app factory (middlewares, SSE hub, static + SPA mounts) |
+| `core/` | `config` (env flags, paths), `db` (SQLAlchemy shim), `db_migrate` (Alembic driver), `events` (SSE hub over `tblEvents`), `boot`, `appctx`, `urls`, `procutil` |
+| `security/` | JWT (HS256, `instance/jwt_secret`), password hashing, auth dependencies, signed download URLs |
+| `routers/` | One router per old blueprint: player/API (`public.py`), `tables/` grid editors, `ttrpg`, `battlemap`, `monsters`, `reference`, `obs/`, `relay_admin`, `handouts`, `auth`, `users`, `events` (SSE) |
+| `models/`, `schemas/`, `migrations/` | SQLAlchemy models, pydantic request models, the Alembic chain |
+| `sql.py`, `extensions.py`, `defaultData.py` | Raw-sqlite queries/queue helpers/scene activation, the master-volume backend, seed data |
+| `media/` | Players (`player_ipc` persistent mpv, `player`/`mpvPlayer` classic, `mpv_ipc`, `mpv.sh`/`mpvAudio.sh`), download/metadata/playlist workers (`yt_que`, `meta_que`, `playlist_que`, `ytid`, `ytdlp_source`), thumbnails, media facets, smart scenes, library organiser, shared assets, chimes, `scene_end` |
+| `ttrpg/` | Dice systems, DCC library/randomiser, character/homebrew generators, genre packs, floorplan validation |
+| `integrations/` | Remote-play relay (`relay_*`, `relay_audio_stream`), LAN `discovery`, `remotes`, OBS (`obs_ws`, `obs_layout`), YouTube live, Gemini/Runware AI, Windows loopback capture |
+| `lighting/` | `ledPlayer` (launches `led_Run.py`), the LED pattern registry |
+| `ops/` | Backup/restore/merge, the in-app updater, `restartComputer.sh` |
+| `web/` | The single-page app: `index.html`, `app/` (router, views, ui, layouts), `shared/` (assets copied to the portal), `legacy/` (classic helper scripts), `obs/` (OBS overlay pages), `vendor/` |
+| `static/` | Uploads, thumbnails, browser-extension packages, the legacy static tree |
+| `ChromeExt/`, `FireFoxExt/` | Browser extensions |
+| `tests/` | pytest suite (URL parsing, queue backoff, dedup rules) |
+| `docs/MQTT_LIGHTING.md` | Remote lighting pathways (diagram) + WLED-over-MQTT setup guide |
+| `docs/OBS_MUSIC_WINDOWS.md` | Music → OBS from a Windows server: VB-CABLE setup, hearing it locally, troubleshooting |
+
+---
+
+## Troubleshooting
+
+- **Dependencies** — rerun `./requirements.sh`.
+- **Service not starting** — `systemctl --user status sceneplay_watchdog.service`.
+- **No metadata/downloads** — both queues need internet; check the media
+  table's Download Status column and `tblPlaylistQueue.last_error` for stuck
+  playlist jobs. *Utilities → Backfill Metadata* re-queues legacy rows.
+- **Transport buttons do nothing** — the players expose IPC sockets at
+  `/tmp/mpvsocket-music` / `/tmp/mpvsocket-video` (mpv's JSON IPC, written by Python — `socat` is no longer needed).
+  The music player is the persistent-mpv engine (`player_ipc.py`): one mpv for the session, tracks loaded
+  over IPC, track ends as events. `SP_PLAYER=classic` falls back to the 1.x one-mpv-per-track pipeline.
+- **Wrong/old UI after update** — hard-refresh (Ctrl+Shift+R); static JS/CSS
+  is cached by the browser.
+- **Upload fails with "413 Request Entity Too Large"** (big battlemap video,
+  backup zip) on an older install — the nginx upload cap needs lifting once:
+  `sudo bash ~/ScenePlay/supportFiles/fixNginxUploadSize.sh`. New installs
+  already have it.
+- **No music in OBS from a Windows server** (or the music vanished from the
+  server's own speakers) — Windows needs a virtual cable and a one-time
+  "Listen to this device" tick; the full chain and a meter-by-meter
+  troubleshooting table are in `docs/OBS_MUSIC_WINDOWS.md`.
+- **A remote player's home WLED/Pi lights don't react** — expected on an
+  HTTPS-hosted relay: browsers block HTTPS pages from calling HTTP LAN
+  devices (mixed content). Self-host the relay over plain HTTP (the current,
+  supported path for browser-direct WLED), or try the MQTT bridge
+  (`docs/MQTT_LIGHTING.md` — beta).
+
+Have fun. Don't Panic!!

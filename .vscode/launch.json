@@ -1,0 +1,103 @@
+{
+    // Two virtualenvs live side by side because the repo sits on a drive shared
+    // between Linux and Windows: .venv (Linux) and .venv-win (Windows). The
+    // "linux"/"windows" blocks pick the matching interpreter.
+    //
+    // F5 = the first configuration: the real app on :8086 with the forked
+    // workers, so scenes play. The "UI only" config exists for frontend work
+    // with uvicorn --reload; it never starts mpv (the player bar shows a
+    // "Players OFF" badge and the terminal prints a banner). subProcess:false
+    // everywhere — debugpy's child auto-attach breaks `python -m yt_dlp` on 3.14.
+
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "ScenePlay (F5): run the app \u2014 players ON, :8086",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ws.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "subProcess": false,
+            "env": {
+                "SP_INTEGRATIONS": "0",
+                "SP_CRON_APPLY": "0",
+                "SP_DB_PATH": "${workspaceFolder}/dev.db"
+            },
+            "windows": {
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+            },
+            "linux": {
+                "python": "${workspaceFolder}/.venv/bin/python"
+            }
+        },
+        {
+            "name": "ScenePlay: UI only, auto-reload (ws.py --dev) \u2014 players OFF",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ws.py",
+            "args": [
+                "--dev"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "subProcess": false,
+            "env": {
+                "SP_PORT": "8086",
+                "SP_INTEGRATIONS": "0",
+                "SP_CRON_APPLY": "0",
+                "SP_MPV_SOCKET_PREFIX": "/tmp/mpvsocket-dev-",
+                "SP_DB_PATH": "${workspaceFolder}/dev.db"
+            },
+            "windows": {
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+            },
+            "linux": {
+                "python": "${workspaceFolder}/.venv/bin/python"
+            }
+        },
+        {
+            "name": "ScenePlay: pytest (whole suite)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests",
+                "-q",
+                "-p",
+                "no:warnings"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "windows": {
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+            },
+            "linux": {
+                "python": "${workspaceFolder}/.venv/bin/python"
+            }
+        },
+        {
+            "name": "ScenePlay: pytest (current file)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-q",
+                "-p",
+                "no:warnings"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "windows": {
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+            },
+            "linux": {
+                "python": "${workspaceFolder}/.venv/bin/python"
+            }
+        }
+    ]
+}

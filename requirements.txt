@@ -1,0 +1,39 @@
+# Pinned with ~= (compatible-release) so a fresh install matches the known-good
+# environment instead of silently pulling breaking majors. Refresh deliberately
+# with: pip install -U -r requirements.txt && pip freeze
+fastapi~=0.139
+uvicorn[standard]~=0.49; sys_platform == "linux"
+uvicorn~=0.49; sys_platform == "win32"
+sse-starlette>=2.1,<4
+pydantic~=2.12
+python-multipart~=0.0.20
+SQLAlchemy~=2.0.50
+alembic~=1.16
+bcrypt~=4.3
+PyJWT~=2.10
+requests~=2.34.2
+# Relay audio ingest over a persistent WebSocket (relay_audio_stream._push_ws);
+# absent -> the streamer falls back to rotating chunked POSTs automatically.
+websocket-client~=1.8
+Pillow~=12.2.0
+# QR codes for the player camera page (scan the push link on a phone).
+qrcode~=8.2
+python-crontab~=3.3.0; sys_platform == "linux"
+gTTS~=2.5.4
+psutil~=7.2.2
+yt-dlp
+# Volume backends are OS-specific: PulseAudio on Linux, Core Audio on Windows.
+pulsectl~=24.12.0; sys_platform == "linux"
+# pycaw uses single-segment date versions, which ~= rejects — pin exactly.
+pycaw==20240210; sys_platform == "win32"
+comtypes~=1.4; sys_platform == "win32"
+
+# Dev tooling (used by `make check`)
+pytest~=9.1
+httpx~=0.28
+ruff~=0.15
+
+# Raspberry Pi / LED (install only on Pi hardware)
+# rpi_ws281x
+# adafruit-circuitpython-neopixel
+# adafruit-blinka

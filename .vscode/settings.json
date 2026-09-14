@@ -1,0 +1,17 @@
+{
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": ["tests", "-q"],
+    "python.testing.unittestEnabled": false,
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.pytest_cache": true,
+        "**/.ruff_cache": true
+    }
+}

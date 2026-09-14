@@ -1,0 +1,68 @@
+// Route table: every old Flask page path is kept as an SPA route.
+const V = p => () => import(`./views/${p}.js`);
+const T = (name) => ({ view: V('media/tables/index'), layout: 'media', auth: 'sceneplay', props: { table: name } });
+
+export const layouts = {
+  media: () => import('./layouts/media.js'),
+  ttrpg: () => import('./layouts/ttrpg.js'),
+  chromeless: () => import('./layouts/chromeless.js'),
+};
+
+export const routes = [
+  // auth
+  { path: '/login', view: V('auth/login'), layout: 'chromeless', auth: 'none' },
+  { path: '/ttrpg/setup', view: V('auth/setup'), layout: 'chromeless', auth: 'none' },
+  { path: '/ttrpg/recover', view: V('auth/recover'), layout: 'chromeless', auth: 'none' },
+  { path: '/ttrpg/change-password', view: V('auth/change_password'), layout: 'ttrpg', auth: 'user' },
+  { path: '/logout', view: V('auth/logout'), layout: 'chromeless', auth: 'none' },
+  // media control
+  { path: '/', view: V('media/home'), layout: 'media', auth: 'sceneplay' },
+  { path: '/campaigns', ...T('campaigns') },
+  { path: '/scenes', ...T('scenes') },
+  { path: '/scenePattern', ...T('scene_pattern') },
+  { path: '/wledPallette', ...T('wled_pattern') },
+  { path: '/musicScene', ...T('music_scene') },
+  { path: '/videoScene', ...T('video_scene') },
+  { path: '/music', ...T('music_media') },
+  { path: '/videomedia', ...T('video_media') },
+  { path: '/ledconfig', ...T('led_config') },
+  { path: '/serverIP', ...T('server_ip') },
+  { path: '/cronSchedule', ...T('cron_schedule') },
+  { path: '/utilities', view: V('media/utils/index'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/assets', view: V('media/assets'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/genres', view: V('media/genres'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/artists', view: V('media/artists'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/smart-scenes', view: V('media/smart_scenes'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/organize', view: V('media/organize'), layout: 'media', auth: 'sceneplay' },
+  { path: '/utilities/library', view: V('media/library_nav'), layout: 'media', auth: 'sceneplay' },
+  { path: '/handouts', view: V('media/handouts'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/handouts/:id/read', view: V('media/handout_read'), layout: 'chromeless', auth: 'dm', bodyClass: 'view-fullheight' },
+  // ttrpg
+  { path: '/ttrpg', view: V('ttrpg/dashboard'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/characters', view: V('ttrpg/characters'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/my-character', view: V('ttrpg/my_characters'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/character/new', view: V('ttrpg/character_new'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/character/:id', view: V('ttrpg/character_sheet/index'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/character/:id/edit', view: V('ttrpg/character_edit'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/sessions', view: V('ttrpg/sessions'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/sessions/new', view: V('ttrpg/session_new'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/sessions/:id', view: V('ttrpg/session_detail'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/battlemap/maps', view: V('ttrpg/maps_overview'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/battlemap/active', view: V('ttrpg/battlemap_active'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/battlemap/session/:id', view: V('ttrpg/battlemap_manage/index'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/battlemap/:id/view', view: V('ttrpg/battlemap/index'), layout: 'ttrpg', auth: 'user', bodyClass: 'view-battlemap' },
+  { path: '/ttrpg/battlemap/monster-redirect/:id', view: V('ttrpg/monster_redirect'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/monsters', view: V('ttrpg/monsters'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/monsters/:id/view', view: V('ttrpg/monster_detail'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/monsters/homebrew/new', view: V('ttrpg/monster_homebrew'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/monsters/homebrew/:id/edit', view: V('ttrpg/monster_homebrew'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/reference/library', view: V('ttrpg/reference/browse'), layout: 'ttrpg', auth: 'user' },
+  { path: '/ttrpg/reference/settings', view: V('ttrpg/reference/api_settings'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/reference/:kind', view: V('ttrpg/reference/library_page'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/relay', view: V('ttrpg/relay_status'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/relay/party', view: V('ttrpg/relay_party'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/relay/rolls', view: V('ttrpg/relay_rolls'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/register', view: V('ttrpg/users'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/obs', view: V('ttrpg/obs_broadcast/index'), layout: 'ttrpg', auth: 'dm' },
+  { path: '/ttrpg/obs/feed/:id', view: V('ttrpg/obs_my_feed'), layout: 'ttrpg', auth: 'user' },
+];

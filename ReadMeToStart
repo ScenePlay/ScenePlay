@@ -1,0 +1,54 @@
+ScenePlay — quick start
+=======================
+
+ScenePlay turns one computer (a Raspberry Pi or any Linux box — Windows works
+too) into an atmosphere controller for tabletop gaming: music, video, LED
+lighting and a full TTRPG toolkit, all controlled from any browser on your
+network (phone, tablet, laptop).
+
+Full, beginner-friendly install instructions live in README.md — read that
+first. The short version:
+
+Linux / Raspberry Pi
+--------------------
+1. Open a Terminal.
+2. sudo visudo   → add at the bottom (your username instead of sammy):
+       sammy  ALL=(ALL) NOPASSWD:ALL
+   save with Ctrl+X, Y, Enter.
+3. cd ~
+   git clone https://github.com/ScenePlay/ScenePlay_Flask_Media_Wrapper ScenePlay
+4. cd ~/ScenePlay
+   chmod +x requirements.sh
+   ./requirements.sh        (takes a while; sets up auto-start on boot)
+   sudo reboot
+5. From any device on the same network open:
+       http://<server-ip>             (find the ip with: hostname -I)
+   No port needed — the installer sets up nginx on the normal web port.
+   Fallback if that doesn't respond: http://<server-ip>:8086
+
+Windows
+-------
+1. Download the project (green Code button → Download ZIP → Extract All),
+   put the folder somewhere permanent.
+2. Double-click install.bat and follow the prompts (if it asks you to re-run
+   it, close the window and double-click it again).
+3. Double-click startApp.bat, allow it through the firewall if asked, then
+   open http://localhost:8086
+
+Uninstalling
+------------
+Linux: run ./uninstall.sh from ~/ScenePlay.  Windows: double-click
+uninstall.bat.  Both ask before removing shared tools or your media/database.
+
+Importing music/video from YouTube
+----------------------------------
+Use the Utilities page, or install the browser extension (see "Browser
+extensions" in README.md): chrome://extensions → Developer mode →
+Load unpacked → select the ChromeExt folder. The extension works on YouTube
+pages and sends the video straight to your server.
+
+Note: downloading and self-hosting is meant for YOUR OWN content — media you
+created, own, or have permission to store. Downloading other people's
+content may violate YouTube's Terms of Service and copyright law.
+
+Have fun. Don't Panic!!

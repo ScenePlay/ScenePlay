@@ -1,0 +1,383 @@
+<!-- The party scene's frame, as ONE browser source: background art, title
+     strip and the information panel.
+
+     Modes off the same page, so the look can never drift between them:
+       bg    - background art only, sits at the back of EVERY ScenePlay scene
+       title - the title strip, shared by the Party and Map scenes
+       info  - the information panel (notes, else the dice feed)
+       dice  - the roll feed on its own, for the battle map scene
+       pre/post - the show's top and tail: one image at 75% of the canvas
+               with a placeable title, over the shared background
+
+     Every mode except bg and pre/post FILLS ITS OWN SOURCE. OBS already knows
+     where each box goes, so the page never positions itself against canvas
+     coordinates it cannot see — doing that once shrank the dice feed to a
+     sliver, and made "same size in both scenes" a coincidence rather than a
+     guarantee.
+
+     One source rather than three because these three things share a look and
+     have to line up exactly. Splitting them would mean three CEF instances on
+     the streaming box and three transforms to keep in sync; here the layout is
+     CSS and the player tiles simply sit on top of the region left for them.
+
+     The panel shows the DM's notes when there are any, and otherwise streams
+     the dice as they are rolled — so it is never an empty box on stream.
+
+     Served by routers/obs.py at /ttrpg/obs/panel?t=<token>&mode=<mode>; the
+     card-mode list, theme and poll interval ride the /state poll. -->
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>ScenePlay panel</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: transparent;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #f2efe6;
+  }
+  #bg, #bg-vid { position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: cover; }
+  /* Without art the scene would key onto whatever OBS has underneath, which
+     is rarely what the DM wants — fall back to the table's own dark field. */
+  #bg-fallback { position: absolute; inset: 0;
+                 background: var(--sfc-bg,
+                             radial-gradient(ellipse at 30% 20%, #1b1d27, #0c0d12 70%)); }
+
+  #title {
+    position: absolute; left: 0; right: 0; top: 0;
+    /* Everything groups LEFT: campaign, then session + turn beside it —
+       not spread across the strip. */
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: 2vw; padding: 0 2.2vw; box-sizing: border-box;
+    background: var(--sfc-title,
+                    linear-gradient(180deg, rgba(8,9,13,.92), rgba(8,9,13,.62)));
+    border-bottom: 2px solid var(--accent-soft, rgba(200,168,110,.55));
+  }
+  #title-main { font-weight: 800; letter-spacing: .02em; color: var(--accent-text, #e8d7ac);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #title-sub { font-weight: 600; opacity: .85; white-space: nowrap;
+               display: flex; align-items: center; gap: 1.4em; }
+  /* The episode: quieter than the campaign, still readable from the couch. */
+  #session-name { opacity: .8; }
+  /* Whose turn it is used to be shown by growing their tile. That moved the
+     layout under the audience every turn, so it says it in words instead. */
+  #turn { color: #7fd18a; }
+
+  #panel {
+    position: absolute; box-sizing: border-box;
+    display: flex; flex-direction: column;
+    background: var(--sfc-panel, rgba(8,9,13,.72));
+    border-left: 1px solid rgba(200,168,110,.35);
+    /* Both of these are load-bearing, not tidiness: the roll rows animate on
+       arrival, which promotes them to their own compositing layer, and
+       without an explicit clip Chromium paints a ghost copy of the animated
+       text at the far left of the canvas. OBS renders through Chromium too,
+       so that ghost would go out on the stream. */
+    overflow: hidden; contain: paint;
+  }
+  /* Every size in the panel is a share of --u (1% of the panel's OWN width,
+     set from JS once it is positioned). Viewport units were wrong here: the
+     same markup runs full-canvas in the party frame and inside a ~500px
+     source on the map, so 1vw meant 19px in one and 5px in the other. */
+  #panel-head { padding: calc(var(--u, 5px) * 2.4) calc(var(--u, 5px) * 2.6)
+                         calc(var(--u, 5px) * 1.6); font-size: calc(var(--u, 5px) * 4.8);
+                font-weight: 700;
+                letter-spacing: .12em; text-transform: uppercase;
+                color: var(--accent, #c8a86e); border-bottom: 1px solid var(--accent-faint, rgba(200,168,110,.25)); }
+  /* The scroll area. It is a real overflow container so long notes can be
+     scrolled programmatically; nothing here waits on a human to drag it. */
+  #scroll { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden;
+            padding: calc(var(--u, 5px) * 1.6) calc(var(--u, 5px) * 1.6)
+                     calc(var(--u, 5px) * 2.4);
+            scrollbar-width: thin;
+            contain: paint;
+            scrollbar-color: rgba(200,168,110,.55) transparent; }
+  #scroll::-webkit-scrollbar { width: 8px; }
+  #scroll::-webkit-scrollbar-thumb { background: rgba(200,168,110,.55);
+                                     border-radius: 99px; }
+
+  .note { font-size: calc(var(--u, 5px) * 5); line-height: 1.5; margin: 0 0 .7vh;
+          text-shadow: 0 1px 3px #000; }
+
+  /* Two lines, not one: on a strip this narrow a single row forced the name,
+     the label and the total to share the width, which capped how big any of
+     them could get. The total spans both rows on the right. */
+  .roll { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+          column-gap: calc(var(--u, 5px) * 3); align-items: center;
+          padding: calc(var(--u, 5px) * 2.2) calc(var(--u, 5px) * 1.5);
+          border-bottom: 1px solid rgba(255,255,255,.07);
+          animation: slide-in .45s ease both; }
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .roll-who { grid-column: 1; grid-row: 1;
+              font-weight: 700; color: var(--accent-text, #e8d7ac); font-size: calc(var(--u, 5px) * 6.6);
+              line-height: 1.15;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .roll-what { grid-column: 1; grid-row: 2;
+               font-size: calc(var(--u, 5px) * 4.2); opacity: .65;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .roll-total { grid-column: 2; grid-row: 1 / span 2;
+                font-weight: 800; font-size: calc(var(--u, 5px) * 10);
+                line-height: 1; }
+  /* A natural 20 and a natural 1 are the two results a table reacts to, so
+     they are the two the audience should be able to spot without reading. */
+  .roll.crit  .roll-total { color: #7fd18a; }
+  .roll.fumble .roll-total { color: #e06666; }
+  /* ── pre / post show card ── */
+  #show { position: absolute; inset: 0; display: none; }
+  #show-img, #show-vid {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    /* 75% of the canvas, contained rather than cropped: the background art is
+       meant to frame it, and object-fit:cover would cut off whatever the DM
+       put at the edges of their card. */
+    width: 75%; height: 75%; object-fit: contain;
+    filter: drop-shadow(0 10px 40px rgba(0,0,0,.65));
+  }
+  #show-title-wrap {
+    position: absolute; inset: 0; display: flex;
+    padding: 5vh 6vw; box-sizing: border-box;
+  }
+  #show-title {
+    font-size: 5.2vw; font-weight: 800; letter-spacing: .01em;
+    color: var(--accent-text, #e8d7ac); text-shadow: 0 4px 22px rgba(0,0,0,.95);
+    max-width: 100%; line-height: 1.15;
+  }
+  .empty { opacity: .45; font-size: calc(var(--u, 5px) * 4.4);
+           font-style: italic; padding: 1vh 0; }
+</style>
+</head><body>
+
+<div id="bg-fallback"></div>
+<img id="bg" alt="" style="display:none;">
+<video id="bg-vid" muted loop autoplay playsinline style="display:none;"></video>
+<div id="title">
+  <div id="title-main"></div>
+  <div id="title-sub"><span id="session-name"></span><span id="turn"></span></div>
+</div>
+<div id="panel">
+  <div id="panel-head">Information</div>
+  <div id="scroll"></div>
+</div>
+<div id="show">
+  <img id="show-img" alt="">
+  <video id="show-vid" muted loop autoplay playsinline></video>
+  <div id="show-title-wrap"><div id="show-title"></div></div>
+</div>
+
+<script src="/obs/overlay_common.js"></script>
+<script>
+const STATE_URL = OBS.stateUrl();
+const PANEL_MODES = ['bg', 'title', 'info', 'dice', 'pre', 'intermission', 'post'];
+const _want = (OBS.q.get('mode') || 'info').trim().toLowerCase();
+const MODE = PANEL_MODES.indexOf(_want) !== -1 ? _want : 'info';
+let POLL_MS = 4000;
+
+function el(id) { return document.getElementById(id); }
+
+// The frame's geometry comes from the server so it matches EXACTLY the area
+// the party tiles were laid out around — duplicating the maths here would let
+// the two drift and put a tile under the panel.
+const SHOW_BG = MODE === 'bg';
+const SHOW_TITLE = MODE === 'title';
+const SHOW_PANEL = MODE === 'info' || MODE === 'dice';
+// Driven by the server's own list of show-card modes, not a hand-written
+// OR chain: adding the intermission card silently missed this line, so the
+// page rendered nothing for it while every other check still passed. The
+// list rides the state poll now (card_modes); until it lands, every mode
+// that is not one of the frame's own is a card.
+let CARD_MODES = ['intermission', 'post', 'pre'];
+let SHOW_CARD = CARD_MODES.indexOf(MODE) !== -1;
+
+// A nine-way placement maps cleanly onto flexbox, so "where does the title
+// go" needs no coordinates and can never land off-canvas.
+const ALIGN = {top: 'flex-start', middle: 'center', bottom: 'flex-end',
+               left: 'flex-start', center: 'center', right: 'flex-end'};
+
+// Art may be a still OR a looping video (mp4/webm). One painter for both:
+// point the right element at the URL, hide the other. Videos autoplay because
+// they are muted — no user gesture exists inside a browser source.
+const isVideoUrl = OBS.isVideoUrl;
+const paintMedia = OBS.paintMedia;
+
+function paintShow(d) {
+  const cfg = d[MODE] || {};
+  document.getElementById('show').style.display = 'block';
+  const img = paintMedia(document.getElementById('show-img'),
+                         document.getElementById('show-vid'), cfg.image_url);
+  if (cfg.image_url) {
+    const f = (d.image_fraction || 0.75) * 100;
+    img.style.width = f + '%';
+    img.style.height = f + '%';
+  }
+  const t = document.getElementById('show-title');
+  t.textContent = cfg.title || '';
+  const [v, hz] = (cfg.pos || 'bottom-center').split('-');
+  const wrap = document.getElementById('show-title-wrap');
+  wrap.style.alignItems = ALIGN[v] || 'flex-end';
+  wrap.style.justifyContent = ALIGN[hz] || 'center';
+  t.style.textAlign = hz === 'right' ? 'right' : hz === 'left' ? 'left' : 'center';
+}
+// Hide everything this mode does not own BEFORE the first state arrives.
+// Doing it in layout() left the panel and title strip painted on the show
+// cards, and flashed them for one poll in the bg and dice sources.
+if (!SHOW_BG) document.getElementById('bg-fallback').style.display = 'none';
+if (!SHOW_TITLE) document.getElementById('title').style.display = 'none';
+if (!SHOW_PANEL) document.getElementById('panel').style.display = 'none';
+
+function layout() {
+  if (SHOW_TITLE) {
+    const title = el('title');
+    title.style.display = '';
+    title.style.height = '100%';
+    // Sized off the strip's OWN height, which is exactly the box OBS gave us.
+    const h = title.getBoundingClientRect().height;
+    el('title-main').style.fontSize = Math.round(h * 0.42) + 'px';
+    el('title-sub').style.fontSize = Math.round(h * 0.26) + 'px';
+  }
+  if (SHOW_PANEL) {
+    const panel = el('panel');
+    panel.style.display = '';
+    panel.style.left = panel.style.top = '0';
+    panel.style.width = panel.style.height = '100%';
+    // Text scales with the panel, so it reads identically wherever it lands.
+    const px = panel.getBoundingClientRect().width / 100;
+    if (px > 0) panel.style.setProperty('--u', px + 'px');
+  }
+}
+
+let lastBg = null;
+function paintBg(url) {
+  if (!SHOW_BG) return;
+  if (url === lastBg) return;
+  lastBg = url;
+  paintMedia(el('bg'), el('bg-vid'), url);
+}
+
+function rollRow(r) {
+  const row = document.createElement('div');
+  row.className = 'roll' + (r.crit ? ' crit' : r.fumble ? ' fumble' : '');
+  const who = document.createElement('div');
+  who.className = 'roll-who'; who.textContent = r.who || '—';
+  const what = document.createElement('div');
+  what.className = 'roll-what';
+  what.textContent = [r.label, r.expression].filter(Boolean).join(' · ');
+  const total = document.createElement('div');
+  total.className = 'roll-total'; total.textContent = r.total;
+  row.append(who, what, total);
+  return row;
+}
+
+let shownRolls = [], mode = null;
+
+
+function paintNotes(lines) {
+  const host = el('scroll');
+  host.innerHTML = '';
+  lines.forEach(line => {
+    const p = document.createElement('div');
+    // The DM's text, HTML and all — the box accepts markup (<b>, <i>,
+    // <span style=…>) so a line can carry its own type styling. Only the
+    // authenticated broadcast form writes it, so this is the DM styling
+    // their own overlay, not untrusted input.
+    p.className = 'note'; p.innerHTML = line;
+    host.appendChild(p);
+  });
+  el('panel-head').textContent = 'Information';
+}
+
+function paintRolls(rolls) {
+  const host = el('scroll');
+  // Newest at the TOP, older ones below it. Only insert what's new: rebuilding
+  // the list would replay the slide-in on every row every poll, which reads as
+  // the whole panel flickering rather than one roll arriving.
+  const known = new Set(shownRolls);
+  const fresh = rolls.filter(r => !known.has(r.id));
+  if (mode !== 'rolls') { host.innerHTML = ''; shownRolls = []; known.clear(); }
+  if (!rolls.length) {
+    host.innerHTML = '<div class="empty">Waiting for the first roll…</div>';
+  } else {
+    if (host.querySelector('.empty')) host.innerHTML = '';
+    // The server sends them oldest-first, so prepending in that order leaves
+    // the newest on top: each one pushes the previous down.
+    fresh.forEach(r => host.insertBefore(rollRow(r), host.firstChild));
+  }
+  shownRolls = rolls.map(r => r.id);
+  // Trim from the BOTTOM now — that is where the oldest rolls live.
+  while (host.children.length > 40) host.removeChild(host.lastChild);
+  host.scrollTop = 0;                   // the newest is at the top, so stay there
+  el('panel-head').textContent = 'Dice';
+}
+
+// The DM's accent colour, shared with the tiles so one save re-skins the
+// whole stream. Text gets a lightened variant — the raw accent is tuned for
+// borders and reads muddy as type on the dark field.
+function applyTheme(t) {
+  if (!t || !/^#[0-9a-fA-F]{6}$/.test(t.accent || '')) return;
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(t.accent.slice(i, i + 2), 16));
+  const light = [r, g, b].map(v => Math.round(v + (255 - v) * 0.45));
+  const s = document.documentElement.style;
+  s.setProperty('--accent', t.accent);
+  s.setProperty('--accent-text', `rgb(${light.join(',')})`);
+  s.setProperty('--accent-soft', `rgba(${r},${g},${b},.55)`);
+  s.setProperty('--accent-faint', `rgba(${r},${g},${b},.25)`);
+  // The base pair tints every field the pages paint on. base2 defaults to
+  // base server-side, so an untouched theme still renders solid.
+  const base = /^#[0-9a-fA-F]{6}$/.test(t.base || '') ? t.base : '#08090d';
+  const b2 = /^#[0-9a-fA-F]{6}$/.test(t.base2 || '') ? t.base2 : base;
+  const rgbaOf = (h, a) => {
+    const [x, y, z] = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    return `rgba(${x},${y},${z},${a})`;
+  };
+  const grad = (c1, c2) => (t.dir === 'radial')
+    ? `radial-gradient(ellipse at 50% 40%, ${c1}, ${c2} 78%)`
+    : `linear-gradient(${parseInt(t.dir, 10) || 180}deg, ${c1}, ${c2})`;
+  // The dither: a faint tiled noise layer over the blend, so the gradient
+  // never shows compression banding on stream. Only when there IS a blend.
+  const noise = base === b2 ? '' : NOISE_LAYER + ', ';
+  s.setProperty('--sfc-bg', noise + grad(base, b2));
+  s.setProperty('--sfc-title', noise + grad(rgbaOf(base, 0.92), rgbaOf(b2, 0.68)));
+  s.setProperty('--sfc-panel', noise + grad(rgbaOf(base, 0.72), rgbaOf(b2, 0.72)));
+}
+
+const NOISE_LAYER = OBS.NOISE_LAYER;
+
+function apply(d) {
+  if (!d) return;
+  if (d.poll_s) POLL_MS = Math.max(1, Number(d.poll_s) || 4) * 1000;
+  if (Array.isArray(d.card_modes)) { CARD_MODES = d.card_modes; SHOW_CARD = CARD_MODES.indexOf(MODE) !== -1; }
+  if (d.theme) applyTheme(d.theme);
+  if (SHOW_CARD) { paintShow(d); return; }
+  layout();
+  paintBg(d.bg_url);
+  el('title-main').textContent = d.title || '';
+  // The session rides as a subtitle unless it IS the title (no campaign set).
+  el('session-name').textContent =
+    (d.session && d.session !== d.title) ? d.session : '';
+  el('turn').textContent = d.turn ? '▶ ' + d.turn : '';
+
+  if (!SHOW_PANEL) return;
+  // In pop-over mode the panel shows whichever happened last — the standing
+  // note or a roll — and that applies to BOTH sources, so the map scene's
+  // dice feed carries the DM's message too. With the panel permanently on
+  // screen, the dice source keeps its old rule: dice only, notes must not
+  // displace them the way they do on the party panel.
+  const notes = (d.dice_popover ? !d.show_notes : MODE === 'dice')
+    ? [] : (d.info_lines || []).filter(s => s.trim());
+  if (notes.length) {
+    if (mode !== 'notes' || notes.join('\n') !== (window.__notes || '')) {
+      window.__notes = notes.join('\n');
+      paintNotes(notes);
+    }
+    mode = 'notes';
+  } else {
+    paintRolls(d.rolls || []);
+    mode = 'rolls';
+  }
+}
+
+OBS.poll(STATE_URL, apply, () => POLL_MS);
+</script>
+</body></html>

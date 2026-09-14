@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScenePlay</title>
+  <link rel="icon" href="/static/favicon.ico">
+  <!-- theme before first paint: same localStorage key the old theme.js used -->
+  <script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('sp-theme')||'daylight');}catch(e){}</script>
+  <!-- themes.css first so :root vars are available to everything that follows -->
+  <link rel="stylesheet" href="/shared/themes.css">
+  <link rel="stylesheet" href="/vendor/bootstrap.min.css">
+  <!-- sp-core after bootstrap so the shared component layer wins -->
+  <link rel="stylesheet" href="/css/sp-core.css">
+  <link rel="stylesheet" href="/css/sp-ttrpg.css">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/sp-spa.css">
+  <!-- vendor UMD globals the ported page code references by name -->
+  <script src="/vendor/bootstrap.bundle.min.js"></script>
+  <script src="/vendor/gridjs.umd.js"></script>
+  <script src="/vendor/w3color.js"></script>
+  <script type="module" src="/app/main.js"></script>
+</head>
+<body>
+  <div id="shell"><div id="sp-boot" class="sp-boot">Loading ScenePlay…</div></div>
+  <div id="sp-toasts" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+</body>
+</html>

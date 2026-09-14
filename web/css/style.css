@@ -1,0 +1,294 @@
+/* ── ScenePlay media-side styles ─────────────────────────────────────────────
+   Loaded only by templates/base.html, after sp-core.css. Shared components
+   (typography, buttons, forms, navbar, Grid.js theme, layout patterns) live
+   in sp-core.css — this file is only what's unique to the media side:
+   the player bar, now-playing, the media picker, and the home scene grid.
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* ── Player bar shell (base.html) ─────────────────────────────────────────
+   #container/#content wrap the persistent player bar on every media page. */
+#container {
+    margin: 12px;
+    border: 1px solid var(--sp-border);
+    box-shadow: var(--sp-shadow-1);
+    background-color: var(--sp-surface);
+    border-radius: var(--sp-radius);
+}
+#content {
+    padding: 16px 20px;
+}
+
+/* ── Player bar ───────────────────────────────────────────────────────────
+   One flex row of sections split by faint dividers:
+   volume | now playing | transport | queue counts | stop.
+   Bootstrap utilities lay out the button rows inside each section. */
+.sp-player-bar {
+    display: flex;
+    align-items: center;
+    /* Sections that don't fit drop to the next row — without this the stop
+       buttons get pushed past the container edge on narrow windows. */
+    flex-wrap: wrap;
+    row-gap: 14px;
+}
+.sp-player-section {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 18px;
+}
+.sp-player-section:first-child { padding-left: 0; }
+.sp-player-section + .sp-player-section {
+    border-left: 1px solid var(--sp-border);
+}
+/* Volume gives up width first (down to its basis) before anything wraps;
+   the slider follows the section instead of dictating a fixed 500px. */
+.sp-player-volume {
+    flex: 1 1 100px;
+    max-width: 190px;
+}
+/* Now-playing shrinks by ellipsizing titles rather than forcing the row wide. */
+.sp-player-np {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+#volume {
+    font-size: .95rem;
+    line-height: 1.5;
+    font-weight: 500;
+}
+.sp-volume-slider {
+    width: 100%;
+    min-width: 80px;
+    max-width: 150px;
+    accent-color: var(--sp-accent);
+}
+
+.sp-np-scene {
+    color: var(--sp-muted);
+    font-size: .8em;
+}
+.sp-np-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 340px;
+}
+.sp-np-thumb {
+    height: 40px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: none;               /* shown by npRow() once metadata supplies art */
+}
+.sp-np-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;   /* flex item: allow shrinking so the ellipsis actually engages */
+}
+.sp-np-muted { color: var(--sp-muted); }
+
+.sp-keep-label {
+    font-size: .8em;
+    color: var(--sp-muted);
+}
+
+/* Phone layout: two columns, now-playing full-width on top, dividers off. */
+@media (max-width: 767px) {
+    #container { margin: 8px; }
+    #content   { padding: 12px 14px; }
+    .sp-player-bar {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 14px;
+        align-items: start;
+    }
+    .sp-player-section,
+    .sp-player-section + .sp-player-section {
+        border-left: none;
+        padding: 0;
+    }
+    .sp-player-np {
+        grid-column: 1 / -1;
+        order: -1;
+    }
+    .sp-player-volume { max-width: none; }
+    .sp-volume-slider { max-width: none; }
+    .sp-np-row { max-width: 100%; }
+}
+
+/* ── Media picker (scene tables) ──────────────────────────────────────────
+   .sp-picker-btn is the per-row face (thumb + short name); #spMediaPicker is
+   the ONE shared floating panel site.js builds on open and removes on close. */
+.sp-picker-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--sp-btn-tint);
+    color: var(--sp-text);
+    border: 1px solid var(--sp-btn-tint-border);
+    border-radius: var(--sp-radius-sm);
+    padding: 3px 8px;
+    cursor: pointer;
+    max-width: 300px;
+}
+.sp-picker-btn img {
+    height: 20px;
+    border-radius: 2px;
+    flex: none;
+}
+.sp-picker-btn span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#spMediaPicker {
+    position: fixed;
+    z-index: 1070;
+    width: 400px;
+    max-width: 95vw;
+    max-height: 55vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--sp-surface);
+    border: 1px solid var(--sp-border);
+    border-radius: var(--sp-radius);
+    box-shadow: var(--sp-shadow-2);
+}
+#spMediaPicker input {
+    margin: 8px;
+    padding: 4px 8px;
+    background: var(--sp-input-bg);
+    color: var(--sp-text);
+    border: 1px solid var(--sp-border);
+    border-radius: var(--sp-radius-sm);
+}
+.sp-picker-list {
+    overflow-y: auto;
+    padding: 0 4px 6px;
+}
+.sp-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.sp-picker-row:hover {
+    background: var(--sp-surface-2);
+    color: var(--sp-heading);
+}
+.sp-picker-row.current { outline: 1px solid var(--sp-accent); }
+.sp-picker-row img {
+    height: 24px;
+    border-radius: 3px;
+    flex: none;
+}
+.sp-picker-row .nm {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-picker-row .dur {
+    color: var(--sp-muted);
+    font-size: .85em;
+    flex: none;
+}
+
+/* ── Multi-select delete checkboxes (all gridjs tables) ─────────────────── */
+.sp-row-check {
+    width: 17px;
+    height: 17px;
+    cursor: pointer;
+    accent-color: var(--sp-accent);
+}
+
+/* ── Home scene grid ──────────────────────────────────────────────────────
+   Each card is one activation target; --c1/--c2 arrive inline from Jinja
+   (the scene's RPi + WLED colors) and paint the band. */
+.sp-scene-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.sp-scene-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* tinted like every other selection button — plain --sp-surface made the
+       cards vanish into the page background on light themes */
+    background: var(--sp-btn-tint);
+    border: 1px solid var(--sp-btn-tint-border);
+    border-radius: var(--sp-radius);
+    box-shadow: var(--sp-shadow-1);
+    padding: 10px;
+    text-decoration: none;
+    color: var(--sp-heading);
+    transition: transform .12s ease, box-shadow .12s ease;
+}
+.sp-scene-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--sp-shadow-2);
+    background: var(--sp-btn-tint-hover);
+    color: var(--sp-heading);
+}
+.sp-scene-band {
+    display: block;
+    height: 34px;
+    border-radius: calc(var(--sp-radius) - 4px);
+    background: linear-gradient(120deg, rgb(var(--c1)), rgb(var(--c2)));
+}
+.sp-scene-name {
+    font-weight: 600;
+    font-size: .95rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+/* Scene card queue toggle: + Queue → ✓ Queued (green) → ◑ Partly (amber)
+   as the players eat through it. State is on data-state; the three labels
+   are toggled purely in CSS so the poll only touches the attribute. */
+.sp-scene-queue {
+    align-self: flex-start;
+    font-size: .7rem;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--sp-border);
+    background: var(--sp-surface-2);
+    color: var(--sp-muted);
+    cursor: pointer;
+}
+.sp-scene-queue:hover { border-color: var(--sp-accent); color: var(--sp-heading); }
+.sp-scene-queue[data-state="all"]  { border-color: #2f7d38; color: #2f7d38; background: rgba(63,161,74,.12); }
+.sp-scene-queue[data-state="some"] { border-color: #b9770e; color: #b9770e; background: rgba(185,119,14,.12); }
+.sp-scene-queue-on, .sp-scene-queue-some { display: none; }
+.sp-scene-queue[data-state="all"]  .sp-scene-queue-on,
+.sp-scene-queue[data-state="some"] .sp-scene-queue-some { display: inline; }
+.sp-scene-queue[data-state="all"]  .sp-scene-queue-off,
+.sp-scene-queue[data-state="some"] .sp-scene-queue-off { display: none; }
+.sp-scene-card.sp-dragging { opacity: .45; outline: 2px dashed var(--sp-accent); }
+.sp-scene-stats {
+    font-size: .72rem;
+    color: var(--sp-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-scene-time { opacity: .85; }
+.sp-scene-leds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.sp-led-tag {
+    font-size: .68rem;
+    color: var(--sp-muted);
+    border: 1px solid var(--sp-border);
+    border-radius: 10px;
+    padding: 1px 7px;
+    background: var(--sp-surface-2);
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
