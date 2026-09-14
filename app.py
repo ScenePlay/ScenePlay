@@ -144,6 +144,8 @@ def create_app(testing=False):
     app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(events_router.router)
+    import routers.producer as producer
+    app.include_router(producer.router)
     _include_optional(app, 'routers.scenes')
     _include_optional(app, 'routers.utilities')
     _include_optional(app, 'routers.tables')

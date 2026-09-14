@@ -453,8 +453,17 @@ AUTO_CAM_IDLE_S = 5
 AUTO_CAM_OFF_S = 10
 
 
-def auto_cam_on():
+def auto_cam_setting():
+    """The DM's auto-cam switch as saved, regardless of any producer pause."""
     return (appsettingGet('obs_auto_cam', '0') or '0') == '1'
+
+
+def auto_cam_on():
+    """Auto-cam runs only while the DM has it on AND no producer console has
+    paused it (routers/producer.py sets the pause key while a console is open)."""
+    if (appsettingGet('obs_auto_cam_paused_by_producer', '0') or '0') == '1':
+        return False
+    return auto_cam_setting()
 
 
 def _probe_camera_dark(source):
