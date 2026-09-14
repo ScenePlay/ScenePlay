@@ -433,3 +433,27 @@ def test_markers_capped_and_clearable(dm_client, obs, fresh):
     assert len(ms) == 200 and ms[0]['note'] == '5' and ms[-1]['note'] == '204'
     assert dm_client.delete('/ttrpg/producer/api/markers').get_json() == {'ok': True}
     assert dm_client.get('/ttrpg/producer/api/markers').get_json()['markers'] == []
+
+
+def test_concurrent_markers_are_all_kept(dm_client, obs, fresh):
+    """Two consoles stamping at the same moment: the second save must not
+    overwrite the first (read-append-save is serialised)."""
+    import threading
+    import routers.producer as p
+    from sql import appsettingGet, appsettingSet
+    appsettingSet('producer_markers', '[]')
+    n = 8
+    start = threading.Barrier(n)
+
+    def stamp(i):
+        start.wait()
+        with p._markers_lock:
+            rows = p._markers()
+            rows.append({'note': str(i)})
+            p._save_markers(rows)
+
+    threads = [threading.Thread(target=stamp, args=(i,)) for i in range(n)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    import json
+    assert sorted(m['note'] for m in json.loads(appsettingGet('producer_markers', '[]'))) == sorted(str(i) for i in range(n))

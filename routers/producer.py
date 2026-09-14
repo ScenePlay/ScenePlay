@@ -41,6 +41,7 @@ _sweep_gen = 0                # bumped each time a sweeper chain is (re)armed fr
                                # re-arming once its generation is superseded, so a
                                # close-then-reopen inside SWEEP_S never leaves two chains
 _armed = {'key': None}       # shot key currently in Preview (by this router)
+_markers_lock = threading.Lock()  # serialises marker append and clear (read-append-save race)
 
 
 def _now():
@@ -466,9 +467,10 @@ def api_marker(data: dict = Depends(json_body), user=Depends(require_dm)):
             marker['chapter'] = True
         except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
             warning = f'Marker saved, but OBS did not add a chapter: {getattr(exc, "comment", "") or exc}'
-    rows = _markers()
-    rows.append(marker)
-    _save_markers(rows)
+    with _markers_lock:
+        rows = _markers()
+        rows.append(marker)
+        _save_markers(rows)
     _emit_state()
     out = {'ok': True, 'marker': marker}
     if warning:
@@ -483,6 +485,7 @@ def api_markers(user=Depends(require_dm)):
 
 @router.delete('/markers')
 def api_markers_clear(user=Depends(require_dm)):
-    _save_markers([])
+    with _markers_lock:
+        _save_markers([])
     _emit_state()
     return {'ok': True}
