@@ -64,6 +64,9 @@ class CacheHeadersMiddleware:
             # OBS browser sources poll live state and token-gated renders:
             # nothing there may ever be cached (routes/obs.py's after_request).
             policy = b'no-store, no-cache, must-revalidate, max-age=0'
+        elif path.startswith('/ttrpg/producer/api/snap/'):
+            # Producer console snapshot endpoints return live captures.
+            policy = b'no-store'
         elif path.startswith('/vendor/') or path in ('/shared/three.min.js', '/shared/Tone.js'):
             policy = b'public, max-age=86400'
         elif path == '/' or path.endswith(('.html', '.js', '.mjs', '.css')) or not os.path.splitext(path)[1]:

@@ -457,3 +457,46 @@ def test_concurrent_markers_are_all_kept(dm_client, obs, fresh):
     for t in threads: t.join()
     import json
     assert sorted(m['note'] for m in json.loads(appsettingGet('producer_markers', '[]'))) == sorted(str(i) for i in range(n))
+
+
+def test_snapshot_program_preview_and_shot(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    obs['state']['preview_scene'] = 'Player - Carl'
+    r = dm_client.get('/ttrpg/producer/api/snap/program')
+    assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
+    assert r.headers['cache-control'] == 'no-store' and r.get_data().startswith(b'\xff\xd8')
+    assert ('shot', 'ScenePlay Party') in obs['calls']
+    dm_client.get('/ttrpg/producer/api/snap/preview')
+    assert ('shot', 'Player - Carl') in obs['calls']
+    dm_client.get('/ttrpg/producer/api/snap/dm')
+    assert ('shot', 'DM - Jankis') in obs['calls']
+
+
+def test_snapshot_edge_cases(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    _party(monkeypatch)
+    assert dm_client.get('/ttrpg/producer/api/snap/nope').status_code == 404
+    obs['state']['preview_scene'] = ''
+    assert dm_client.get('/ttrpg/producer/api/snap/preview').status_code == 204
+    monkeypatch.setattr(obs_ws, 'screenshot', lambda *a, **k: b'')
+    assert dm_client.get('/ttrpg/producer/api/snap/program').status_code == 204
+    obs['flags']['connected'] = False
+    assert dm_client.get('/ttrpg/producer/api/snap/program').status_code == 204
+
+
+def test_snapshot_obs_failure_is_204(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    _party(monkeypatch)
+
+    def boom(*a, **k):
+        raise obs_ws.ObsUnavailable('timeout')
+    monkeypatch.setattr(obs_ws, 'screenshot', boom)
+    assert dm_client.get('/ttrpg/producer/api/snap/program').status_code == 204
+
+
+def test_levels(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    import time
+    monkeypatch.setattr(obs_ws, 'levels', lambda: ({'ScenePlay Music': [0.5, 0.4]}, time.monotonic() - 0.25))
+    body = dm_client.get('/ttrpg/producer/api/levels').get_json()
+    assert body['levels'] == {'ScenePlay Music': [0.5, 0.4]} and 200 <= body['age_ms'] <= 2000

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 
 import core.events as events
 import integrations.obs_ws as obs_ws
@@ -489,3 +490,44 @@ def api_markers_clear(user=Depends(require_dm)):
         _save_markers([])
     _emit_state()
     return {'ok': True}
+
+
+# ── multiview ────────────────────────────────────────────────────────────────
+
+SNAP_WIDTH = 320
+
+
+def _snap_source(target):
+    snap = obs_ws.current_state()
+    if target == 'program':
+        return snap.get('current_scene', '')
+    if target == 'preview':
+        return snap.get('preview_scene', '')
+    s = shot(target)
+    if s is None:
+        raise ApiError(404, f'Unknown snapshot target {target!r}', code='not_found')
+    return s['scene']
+
+
+@router.get('/snap/{target}')
+def api_snap(target: str, user=Depends(require_dm)):
+    """One JPEG frame of Program, Preview or a shot's scene. 204 (no body)
+    whenever OBS cannot give one — the console keeps the last frame."""
+    source = _snap_source(target)
+    headers = {'Cache-Control': 'no-store'}
+    if not source or not obs_ws.connected():
+        return Response(status_code=204, headers=headers)
+    try:
+        data = obs_ws.screenshot(source, width=SNAP_WIDTH)
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected):
+        data = b''
+    if not data:
+        return Response(status_code=204, headers=headers)
+    return Response(content=data, media_type='image/jpeg', headers=headers)
+
+
+@router.get('/levels')
+def api_levels(user=Depends(require_dm)):
+    lv, at = obs_ws.levels()
+    age_ms = int((time.monotonic() - at) * 1000) if at else 0
+    return {'levels': lv, 'age_ms': max(0, age_ms)}
