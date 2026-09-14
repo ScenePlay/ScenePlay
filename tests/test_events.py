@@ -76,3 +76,12 @@ def test_hub_fanout_and_slow_client_drop(client):
             break
     hub._fanout(0, 'dice', {'x': 1})
     assert slow not in hub._subs
+
+
+def test_producer_topic_is_accepted(client, dm_token):
+    assert events.topic_ok('producer')
+    with client.stream('GET', '/api/v1/events?topics=producer',
+                       headers={'Authorization': f'Bearer {dm_token}'}) as r:
+        assert r.status_code == 200
+        first = next(r.iter_lines())
+        assert 'hello' in first

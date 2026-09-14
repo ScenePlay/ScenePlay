@@ -19,7 +19,7 @@ import core.config as config
 
 TOPICS = {
     'nowplaying', 'queue', 'health', 'relay', 'obs', 'downloads', 'update',
-    'netscan', 'dice', 'scene', 'server',
+    'netscan', 'dice', 'scene', 'server', 'producer',
     # parameterised: battlemap:<id> session:<id> character:<id> syncjob:<job> aijob:<id>
 }
 _PARAM_PREFIXES = ('battlemap:', 'session:', 'character:', 'syncjob:', 'aijob:')
