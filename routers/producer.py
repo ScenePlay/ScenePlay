@@ -27,13 +27,15 @@ router = APIRouter(prefix='/ttrpg/producer/api')
 
 PING_TTL_S = 45              # a console that stops pinging is gone
 STUDIO_OFF_GRACE_S = 10      # reconnect window before Studio Mode is dropped
+SWEEP_S = 15                 # self-re-arming reap interval while any console is open
 PAUSE_KEY = 'obs_auto_cam_paused_by_producer'
 SPECIALS_FRONT = ('party', 'map')
 SPECIALS_BACK = ('pre', 'intermission', 'post')
 
 _consoles = {}               # console_id -> last ping (time.monotonic())
-_lock = threading.Lock()
+_lock = threading.Lock()     # guards _consoles, _off_timer and _sweep_timer
 _off_timer = None
+_sweep_timer = None
 _armed = {'key': None}       # shot key currently in Preview (by this router)
 
 
@@ -54,13 +56,24 @@ def _emit_state():
 
 
 # ── console registry ─────────────────────────────────────────────────────────
+#
+# _consoles, _off_timer and _sweep_timer are all guarded by _lock. The lock is
+# held only around dict/timer bookkeeping — never around an OBS call or
+# appsettingSet, and console_count() must never be called while already
+# holding _lock (it takes the lock itself).
+
+def _reap_locked(now):
+    """Drop ping-expired consoles. Caller must hold _lock."""
+    stale = [cid for cid, at in _consoles.items() if now - at > PING_TTL_S]
+    for cid in stale:
+        del _consoles[cid]
+    return stale
+
 
 def console_count():
     now = time.monotonic()
     with _lock:
-        stale = [cid for cid, at in _consoles.items() if now - at > PING_TTL_S]
-        for cid in stale:
-            del _consoles[cid]
+        stale = _reap_locked(now)
         n = len(_consoles)
     if stale and n == 0:
         _schedule_off()
@@ -85,9 +98,15 @@ def _studio(on):
 
 
 def _off_if_idle():
+    """The grace timer fired: reap once more and, only if nobody reconnected
+    (pinged or reopened) in the meantime, actually put things back."""
     global _off_timer
-    _off_timer = None
-    if console_count():
+    now = time.monotonic()
+    with _lock:
+        _off_timer = None
+        _reap_locked(now)
+        idle = not _consoles
+    if not idle:
         return
     appsettingSet(PAUSE_KEY, '0')
     _armed['key'] = None
@@ -97,23 +116,51 @@ def _off_if_idle():
 
 def _schedule_off():
     global _off_timer
-    if _off_timer is not None:
-        _off_timer.cancel()
     t = threading.Timer(STUDIO_OFF_GRACE_S, _off_if_idle)
     t.daemon = True
-    t.start()
-    _off_timer = t
+    with _lock:
+        if _off_timer is not None:
+            _off_timer.cancel()
+        _off_timer = t
+        t.start()
+
+
+def _sweep():
+    """Self-re-arming reap: notices a console that crashed without DELETE and
+    stopped pinging, even if nobody else calls into this module meanwhile.
+    Re-arms only while a console is still on record; console_count() itself
+    schedules the Studio-Mode-off grace timer when a reap empties the set."""
+    global _sweep_timer
+    console_count()
+    t = None
+    with _lock:
+        if _consoles:
+            t = threading.Timer(SWEEP_S, _sweep)
+            t.daemon = True
+            _sweep_timer = t
+        else:
+            _sweep_timer = None
+    if t is not None:
+        t.start()
 
 
 def open_console():
-    global _off_timer
+    global _off_timer, _sweep_timer
     cid = uuid.uuid4().hex[:12]
-    first = console_count() == 0
+    now = time.monotonic()
+    sweep_t = None
     with _lock:
-        _consoles[cid] = time.monotonic()
-    if _off_timer is not None:
-        _off_timer.cancel()
-        _off_timer = None
+        _consoles[cid] = now
+        first = len(_consoles) == 1
+        if _off_timer is not None:
+            _off_timer.cancel()
+            _off_timer = None
+        if first:
+            sweep_t = threading.Timer(SWEEP_S, _sweep)
+            sweep_t.daemon = True
+            _sweep_timer = sweep_t
+    if sweep_t is not None:
+        sweep_t.start()
     if first:
         appsettingSet(PAUSE_KEY, '1')
         _studio(True)
@@ -134,7 +181,8 @@ def ping_console(cid):
 def close_console(cid):
     with _lock:
         _consoles.pop(cid, None)
-    if console_count() == 0:
+        last = not _consoles
+    if last:
         _schedule_off()
     _emit_state()
 

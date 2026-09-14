@@ -51,15 +51,19 @@ def obs(monkeypatch):
 
 @pytest.fixture()
 def fresh(monkeypatch):
-    """No consoles registered, no off-timer, nothing armed."""
+    """No consoles registered, no off-timer, no sweep-timer, nothing armed."""
     import routers.producer as p
     monkeypatch.setattr(p, '_consoles', {})
     monkeypatch.setattr(p, '_off_timer', None)
+    monkeypatch.setattr(p, '_sweep_timer', None)
     monkeypatch.setattr(p, '_armed', {'key': None})
     yield p
     if p._off_timer is not None:          # a real Timer scheduled by a test: never let it fire later
         p._off_timer.cancel()
         p._off_timer = None
+    if p._sweep_timer is not None:        # ditto for a real sweeper Timer
+        p._sweep_timer.cancel()
+        p._sweep_timer = None
 
 
 def _party(monkeypatch, names=('Carl',)):
@@ -124,11 +128,13 @@ def test_last_close_turns_studio_mode_off_after_grace(dm_client, obs, fresh, mon
     cid = dm_client.post('/ttrpg/producer/api/session').get_json()['console_id']
     cid2 = dm_client.post('/ttrpg/producer/api/session').get_json()['console_id']
     dm_client.delete(f'/ttrpg/producer/api/session/{cid}')
-    assert timers == []                                   # one console still open
+    off_timers = [t for t in timers if t[0] == fresh.STUDIO_OFF_GRACE_S]
+    assert off_timers == []                               # one console still open
     dm_client.delete(f'/ttrpg/producer/api/session/{cid2}')
-    assert len(timers) == 1 and timers[0][0] == fresh.STUDIO_OFF_GRACE_S
+    off_timers = [t for t in timers if t[0] == fresh.STUDIO_OFF_GRACE_S]
+    assert len(off_timers) == 1
     obs['calls'].clear()
-    timers[0][1]()                                        # grace elapsed
+    off_timers[0][1]()                                    # grace elapsed
     assert ('studio', False) in obs['calls'] and ('meters', False) in obs['calls']
     assert appsettingGet(fresh.PAUSE_KEY, '0') == '0'
 
@@ -138,15 +144,54 @@ def test_reopen_within_grace_cancels_the_off_timer(dm_client, obs, fresh, monkey
     cancelled = []
 
     class FakeTimer:
-        def __init__(self, secs, fn): self.daemon = False
+        def __init__(self, secs, fn):
+            self.secs = secs; self.daemon = False
         def start(self): pass
-        def cancel(self): cancelled.append(True)
+        def cancel(self): cancelled.append(self.secs)
 
     monkeypatch.setattr(fresh.threading, 'Timer', FakeTimer)
     cid = dm_client.post('/ttrpg/producer/api/session').get_json()['console_id']
     dm_client.delete(f'/ttrpg/producer/api/session/{cid}')
     dm_client.post('/ttrpg/producer/api/session')
-    assert cancelled == [True]
+    assert [s for s in cancelled if s == fresh.STUDIO_OFF_GRACE_S] == [fresh.STUDIO_OFF_GRACE_S]
+
+
+def test_sweeper_reaps_a_crashed_console(dm_client, obs, fresh, monkeypatch):
+    """No pings, no DELETE, no other call: the sweeper alone must notice the
+    dead console and schedule Studio Mode off."""
+    _party(monkeypatch)
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, secs, fn):
+            timers.append((secs, fn)); self.daemon = False
+        def start(self): pass
+        def cancel(self): pass
+
+    monkeypatch.setattr(fresh.threading, 'Timer', FakeTimer)
+    cid = dm_client.post('/ttrpg/producer/api/session').get_json()['console_id']
+    assert [t[0] for t in timers] == [fresh.SWEEP_S]           # sweeper armed on first open
+    fresh._consoles[cid] -= fresh.PING_TTL_S + 1                # the tab died
+    timers[0][1]()                                              # sweep fires
+    secs = [t[0] for t in timers]
+    assert fresh.STUDIO_OFF_GRACE_S in secs                     # off timer scheduled
+    assert secs.count(fresh.SWEEP_S) == 1                       # sweeper did not re-arm: nobody left
+
+
+def test_sweeper_rearms_while_a_console_is_alive(dm_client, obs, fresh, monkeypatch):
+    _party(monkeypatch)
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, secs, fn):
+            timers.append((secs, fn)); self.daemon = False
+        def start(self): pass
+        def cancel(self): pass
+
+    monkeypatch.setattr(fresh.threading, 'Timer', FakeTimer)
+    dm_client.post('/ttrpg/producer/api/session')
+    timers[0][1]()
+    assert [t[0] for t in timers] == [fresh.SWEEP_S, fresh.SWEEP_S]
 
 
 def test_stale_console_is_reaped_after_ping_ttl(dm_client, obs, fresh, monkeypatch):

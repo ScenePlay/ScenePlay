@@ -771,13 +771,13 @@ def _obs_poll_state(user):
         import integrations.obs_ws as obs_ws
         snap = obs_ws.current_state()
         from routers.obs import (map_mode, viewed_character_id, CUT_TARGETS, _cut_scene_name,
-                                 _muted_ids, auto_cam_on, _card_overrides, _ordered_party)
+                                 _muted_ids, auto_cam_setting, _card_overrides, _ordered_party)
     except Exception:
         return None
     return {'connected': snap['connected'], 'current_scene': snap['current_scene'],
             'recording': snap['recording'], 'streaming': snap['streaming'], 'map_mode': map_mode(),
             'cut_scenes': {k: _cut_scene_name(k) for k in CUT_TARGETS}, 'map_scene': _cut_scene_name('map'),
-            'view_char': viewed_character_id(), 'muted_ids': sorted(_muted_ids()), 'auto_cam': auto_cam_on(),
+            'view_char': viewed_character_id(), 'muted_ids': sorted(_muted_ids()), 'auto_cam': auto_cam_setting(),
             'cards': _cards_state(_card_overrides(), _ordered_party())}
 
 
