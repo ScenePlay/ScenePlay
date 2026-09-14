@@ -97,3 +97,35 @@ def test_screenshot_returns_decoded_bytes(ws):
 def test_screenshot_without_data_is_empty(ws):
     ws['replies']['GetSourceScreenshot'] = {}
     assert ow.screenshot('x') == b''
+
+
+def test_meter_events_reidentify_and_flag(ws, monkeypatch):
+    frames = []
+    monkeypatch.setattr(ow, '_send', lambda f: frames.append(f))
+    monkeypatch.setattr(ow, '_meter_events', False)
+    ow.set_meter_events(True)
+    assert frames == [{'op': 3, 'd': {'eventSubscriptions': ow.EVENT_SUBS | ow.METER_EVENT_FLAG}}]
+    assert ow._event_subs() == ow.EVENT_SUBS | ow.METER_EVENT_FLAG
+    ow.set_meter_events(False)
+    assert frames[-1] == {'op': 3, 'd': {'eventSubscriptions': ow.EVENT_SUBS}}
+    assert ow._event_subs() == ow.EVENT_SUBS
+
+
+def test_meter_events_when_disconnected_only_remember(ws, monkeypatch):
+    frames = []
+    monkeypatch.setattr(ow, '_send', lambda f: frames.append(f))
+    monkeypatch.setattr(ow, '_state', 'reconnecting')
+    ow.set_meter_events(True)
+    assert frames == [] and ow._event_subs() & ow.METER_EVENT_FLAG
+
+
+def test_input_volume_meters_event_fills_levels(ws, monkeypatch):
+    monkeypatch.setattr(ow, '_levels', {})
+    ow._handle_event('InputVolumeMeters', {'inputs': [
+        {'inputName': 'Player - Carl Cam', 'inputLevelsMul': [[0.1, 0.5, 0.6], [0.1, 0.4, 0.6]]},
+        {'inputName': 'ScenePlay Music', 'inputLevelsMul': [[0.2, 0.9, 0.9]]},
+        {'inputName': 'silent', 'inputLevelsMul': []},
+    ]})
+    lv, at = ow.levels()
+    assert lv == {'Player - Carl Cam': [0.5, 0.4], 'ScenePlay Music': [0.9], 'silent': []}
+    assert at > 0

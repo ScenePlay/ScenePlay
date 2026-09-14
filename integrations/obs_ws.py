@@ -60,6 +60,14 @@ DEFAULT_PORT = 4455
 # SceneItemTransformChanged, which fire tens of times a second.
 EVENT_SUBS = 1 | 4 | 8 | 16 | 64 | 128     # 221
 
+# InputVolumeMeters is a high-volume subscription (~20 frames/s); only the
+# producer console wants it, and only while a console is open.
+METER_EVENT_FLAG = 1 << 16
+_meter_events = False
+_levels = {}            # inputName -> [peak multiplier per channel]
+_levels_at = 0.0
+_levels_lock = threading.Lock()
+
 _lock = threading.Lock()     # guards _ws sends + state transitions
 _thread = None
 _stop = threading.Event()
@@ -268,6 +276,28 @@ def last_error():
     """'ts|op|message' from the last failure, or '' once something succeeds."""
     from sql import appsettingGet
     return appsettingGet('obs_last_error', '') or ''
+
+
+def _event_subs():
+    return EVENT_SUBS | (METER_EVENT_FLAG if _meter_events else 0)
+
+
+def set_meter_events(on):
+    """Turn the audio meter event stream on/off with a Reidentify (op 3).
+    Remembered, so a reconnect re-subscribes the same way."""
+    global _meter_events
+    _meter_events = bool(on)
+    if _state == 'connected':
+        try:
+            _send({'op': 3, 'd': {'eventSubscriptions': _event_subs()}})
+        except ObsUnavailable:
+            pass
+
+
+def levels():
+    """({input: [peak per channel]}, monotonic time of the last frame)."""
+    with _levels_lock:
+        return {k: list(v) for k, v in _levels.items()}, _levels_at
 
 
 # ── scene building ────────────────────────────────────────────────────────────
@@ -1045,7 +1075,7 @@ def _session_loop(ws, cfg):
     if hello is None:
         raise RuntimeError('no Hello within timeout')
 
-    ident = {'rpcVersion': _RPC_VERSION, 'eventSubscriptions': EVENT_SUBS}
+    ident = {'rpcVersion': _RPC_VERSION, 'eventSubscriptions': _event_subs()}
     auth = hello.get('authentication')
     if auth:
         # No password configured but OBS wants one: fail fast and clearly.
@@ -1227,6 +1257,7 @@ def _dispatch(frame):
 
 def _handle_event(event_type, data):
     """Cache updates only — never a request() call from the reader thread."""
+    global _levels_at
     if event_type == 'CurrentProgramSceneChanged':
         with _cache_lock:
             _cache['current_scene'] = data.get('sceneName', '')
@@ -1256,6 +1287,17 @@ def _handle_event(event_type, data):
     elif event_type == 'StudioModeStateChanged':
         with _cache_lock:
             _cache['studio_mode'] = bool(data.get('studioModeEnabled'))
+    elif event_type == 'InputVolumeMeters':
+        peaks = {}
+        for inp in data.get('inputs') or []:
+            chans = inp.get('inputLevelsMul') or []
+            peaks[inp.get('inputName', '')] = [
+                float(c[1]) if len(c) > 1 else 0.0 for c in chans]
+        with _levels_lock:
+            _levels.clear()
+            _levels.update(peaks)
+            _levels_at = time.monotonic()
+        return          # never _notify: 20 frames a second must not hit sqlite
     elif event_type == 'ExitStarted':
         # OBS is closing: drop now so the reconnect loop starts cleanly
         # instead of waiting for the socket to time out.
