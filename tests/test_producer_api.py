@@ -339,3 +339,32 @@ def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
     monkeypatch.setattr(ro, '_special_scene', lambda special: '')
     r = dm_client.post('/ttrpg/obs/api/cut/map')
     assert r.status_code == 200 and seen == [('ScenePlay Map', 'broadcast')]
+
+
+def test_second_take_without_rearming_is_refused(dm_client, obs, fresh, monkeypatch):
+    """After a Take, Preview still names the scene that is now Program; the
+    console must not fire a second, empty-target cut."""
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
+    assert dm_client.post('/ttrpg/producer/api/take', json={}).get_json()['ok'] is True
+    obs['state']['current_scene'] = 'ScenePlay Map'          # what OBS reports after the cut
+    obs['calls'].clear()
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body == {'ok': False, 'error': 'Nothing armed.'}
+    assert not any(c[0] == 'take' for c in obs['calls'])
+
+
+def test_take_of_a_preview_armed_inside_obs(dm_client, obs, fresh, monkeypatch):
+    """Preview moved from OBS's own UI (event, no console arm) and differs from
+    Program: a Take is legitimate and reports the scene."""
+    _party(monkeypatch)
+    obs['state']['preview_scene'] = 'Player - Carl'
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body['ok'] is True and body['scene'] == 'Player - Carl'
+
+
+def test_transition_when_disconnected(dm_client, obs, fresh, monkeypatch):
+    obs['flags']['connected'] = False
+    body = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 300}).get_json()
+    assert body == {'ok': False, 'error': 'OBS is not connected.'}
+    assert not any(c[0] == 'transition' for c in obs['calls'])

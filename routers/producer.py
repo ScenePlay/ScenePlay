@@ -346,7 +346,8 @@ def _take(transition, ms):
     if not obs_ws.connected():
         return {'ok': False, 'error': 'OBS is not connected.'}
     scene = obs_ws.preview_scene()
-    if not scene:
+    program = obs_ws.current_state().get('current_scene', '')
+    if _armed['key'] is None and (not scene or scene == program):
         return {'ok': False, 'error': 'Nothing armed.'}
     try:
         if transition:
@@ -390,9 +391,10 @@ def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
     if not name:
         raise ApiError(400, 'transition name required', code='bad_request')
     ms = _ms(data)
-    if obs_ws.connected():
-        try:
-            obs_ws.set_transition(name, ms)
-        except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
-            return {'ok': False, 'error': _obs_error(exc)}
+    if not obs_ws.connected():
+        return {'ok': False, 'error': 'OBS is not connected.'}
+    try:
+        obs_ws.set_transition(name, ms)
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return {'ok': False, 'error': _obs_error(exc)}
     return {'ok': True, 'transition': name, 'ms': ms}
