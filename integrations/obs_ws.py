@@ -83,6 +83,8 @@ def _blank_cache():
         'current_transition': '',
         'transition_ms': 0,
         'studio_mode': False,
+        'preview_scene': '',
+        'last_switch': None,     # {'by': 'producer'|'broadcast'|'auto', 'scene', 'at'}
         'recording': False,
         'streaming': False,
         'record_timecode': '',
@@ -187,24 +189,79 @@ def scene_list(refresh=False):
     return snap['scenes'], snap['current_scene']
 
 
-def switch_scene(name, transition=None, duration_ms=None, timeout=3):
-    """Cut OBS's PROGRAM scene. Studio mode is not used (see the module note
-    in routes/obs.py); this sets program directly."""
+def switch_scene(name, transition=None, duration_ms=None, timeout=3, by='auto'):
+    """Cut OBS's PROGRAM scene directly (legal in Studio Mode too). `by` tags
+    who moved the shot for the producer console: 'broadcast' (Broadcast page),
+    'producer', or 'auto' (auto-cam, scene link, auto-return, group cuts)."""
     if transition:
-        try:
-            request('SetCurrentSceneTransition', {'transitionName': transition},
-                    timeout=timeout)
-            if duration_ms:
-                # Fixed transitions (Cut) reject a duration — never fatal.
-                _set_transition_duration(int(duration_ms), timeout)
-        except ObsRejected as exc:
-            log.info('OBS transition setup rejected (%s) — switching anyway', exc)
+        set_transition(transition, duration_ms, timeout=timeout)
     request('SetCurrentProgramScene', {'sceneName': name}, timeout=timeout)
     # Optimistic; CurrentProgramSceneChanged confirms a beat later.
     with _cache_lock:
         _cache['current_scene'] = name
+        _cache['last_switch'] = {'by': by, 'scene': name, 'at': time.time()}
     _clear_error()
     return name
+
+
+def set_transition(name, duration_ms=None, timeout=3):
+    """Select the transition (and duration) the next cut / Take will use.
+    Fixed transitions (Cut) reject a duration — never fatal."""
+    try:
+        request('SetCurrentSceneTransition', {'transitionName': name}, timeout=timeout)
+        if duration_ms:
+            _set_transition_duration(int(duration_ms), timeout)
+    except ObsRejected as exc:
+        log.info('OBS transition setup rejected (%s) — continuing', exc)
+
+
+# ── Studio Mode (producer console) ──────────────────────────────────────────
+
+def set_studio_mode(on, timeout=3):
+    request('SetStudioModeEnabled', {'studioModeEnabled': bool(on)}, timeout=timeout)
+    with _cache_lock:
+        _cache['studio_mode'] = bool(on)
+
+
+def preview_scene():
+    return current_state().get('preview_scene', '')
+
+
+def set_preview_scene(name, timeout=3):
+    request('SetCurrentPreviewScene', {'sceneName': name}, timeout=timeout)
+    with _cache_lock:
+        _cache['preview_scene'] = name
+
+
+def trigger_transition(timeout=3):
+    """Take: preview becomes program with the current transition."""
+    scene = preview_scene()
+    request('TriggerStudioModeTransition', {}, timeout=timeout)
+    with _cache_lock:
+        _cache['last_switch'] = {'by': 'producer', 'scene': scene, 'at': time.time()}
+    _clear_error()
+
+
+def record_chapter(name, timeout=3):
+    """obs-websocket 5.5+: a chapter marker in the running recording."""
+    request('CreateRecordChapter', {'chapterName': name}, timeout=timeout)
+
+
+def screenshot(source, width=320, image_format='jpg', quality=60, timeout=3):
+    """One frame of a scene or source as raw image bytes (b'' when OBS sent
+    nothing). The producer console's multiview polls this."""
+    import base64
+    r = request('GetSourceScreenshot',
+                {'sourceName': source, 'imageFormat': image_format,
+                 'imageWidth': int(width), 'imageCompressionQuality': int(quality)},
+                timeout=timeout)
+    data = (r or {}).get('imageData', '') or ''
+    if ',' in data:
+        data = data.split(',', 1)[1]
+    try:
+        return base64.b64decode(data) if data else b''
+    except Exception:
+        return b''
 
 
 def last_error():
@@ -769,7 +826,7 @@ def _notify(kind):
         pass
 
 
-_NOTIFY_EVENTS = ('CurrentProgramSceneChanged', 'SceneListChanged', 'SceneNameChanged',
+_NOTIFY_EVENTS = ('CurrentProgramSceneChanged', 'CurrentPreviewSceneChanged', 'SceneListChanged', 'SceneNameChanged',
                   'RecordStateChanged', 'StreamStateChanged', 'StudioModeStateChanged')
 
 
@@ -1173,6 +1230,9 @@ def _handle_event(event_type, data):
     if event_type == 'CurrentProgramSceneChanged':
         with _cache_lock:
             _cache['current_scene'] = data.get('sceneName', '')
+    elif event_type == 'CurrentPreviewSceneChanged':
+        with _cache_lock:
+            _cache['preview_scene'] = data.get('sceneName', '')
     elif event_type == 'SceneListChanged':
         _apply_scene_list({'scenes': data.get('scenes') or []})
     elif event_type == 'SceneNameChanged':
