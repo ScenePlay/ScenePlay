@@ -214,3 +214,6 @@ sceneplay_launch.log
 .claude/worktrees/
 .venv
 .superpowers/
+
+# the SPA helper modules live in web/app/lib — the generic lib/ (venv) ignore above must not swallow them
+!web/app/lib/
