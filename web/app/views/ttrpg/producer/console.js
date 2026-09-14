@@ -167,7 +167,9 @@ export function createConsole(ctx, root) {
       else if (e.key === ' ') { take(true); e.preventDefault(); }
       else if (e.key === 'm' || e.key === 'M') { muteAll(); e.preventDefault(); }
       else if (e.key === 'k' || e.key === 'K') { marker(); e.preventDefault(); }
-      else if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }).catch(() => {}); }
+      // Escape arms nothing: the server answers 400 bad_shot, and quiet:true
+      // keeps that expected rejection from toasting — the preview simply stays.
+      else if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); }
     });
   }
 
