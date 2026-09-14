@@ -35,6 +35,7 @@ fi
 # --- stop the app + its players (same match patterns the app itself uses) ---
 pkill -f "ScenePlay/ws.py"      2>/dev/null   # main server
 pkill -f "ScenePlay/bin/python" 2>/dev/null   # venv children (yt-dlp etc.)
+pkill -f "ScenePlay/.venv/bin/python" 2>/dev/null   # same, .venv layout
 pkill -f "mpvsocket-"           2>/dev/null   # both mpv instances, never a user's own mpv
 pkill mpg123                    2>/dev/null   # legacy/effects player
 # [l]ed_Run: the bracket keeps the pattern from matching this sudo wrapper's

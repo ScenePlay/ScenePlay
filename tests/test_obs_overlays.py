@@ -319,3 +319,18 @@ class TestPageData:
             assert c.get('/api/v1/obs/feed/99').status_code == 404
         with legacy_app.test_client(user=p1) as c:
             assert c.get('/api/v1/obs/feed/dm').status_code == 403
+
+
+def test_card_slot_wrappers_do_not_break_the_flex_layout():
+    """The card's CSS is the 1.x template's verbatim: .portrait is sized as a
+    direct flex child of .card (percentage height) and .hp-row as a child of
+    .who (86% width). The port renders both through wrapper divs built by JS;
+    without display:contents those wrappers become the flex items instead —
+    the portrait collapses to a sliver and the HP text wraps (what OBS showed
+    as 'images bunched up'). tile.html already does this for its slots."""
+    import re
+    src = open('web/obs/card.html', encoding='utf-8').read()
+    for slot in ('pc-portrait-slot', 'pc-stats'):
+        m = re.search(r'<div id="%s"[^>]*>' % slot, src)
+        assert m, slot
+        assert 'display:contents' in m.group(0).replace(' ', ''), m.group(0)

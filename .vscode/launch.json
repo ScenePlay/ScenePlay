@@ -4,9 +4,15 @@
     // "linux"/"windows" blocks pick the matching interpreter.
     //
     // F5 = the first configuration: the real app on :8086 with the forked
-    // workers, so scenes play. The "UI only" config exists for frontend work
-    // with uvicorn --reload; it never starts mpv (the player bar shows a
-    // "Players OFF" badge and the terminal prints a banner). subProcess:false
+    // workers, integrations and cron ON (OBS / relay / LED remotes / WLED and
+    // the cron wizard all act for real: this PC is the appliance now). The "UI
+    // only" config exists for frontend work with uvicorn --reload; it never
+    // starts mpv or dials OBS/relay (the player bar shows a "Players OFF" badge,
+    // the terminal prints a banner, and the Enable buttons say why).
+    // Both use the real database (<repo>/ScenePlay.db — no SP_DB_PATH). Only
+    // one instance can own :8086, so both hand off with the deployed appliance
+    // through tasks.json: preLaunchTask stops the copy started at login,
+    // postDebugTask starts it again when the session ends. subProcess:false
     // everywhere — debugpy's child auto-attach breaks `python -m yt_dlp` on 3.14.
 
     "version": "0.2.0",
@@ -20,10 +26,11 @@
             "cwd": "${workspaceFolder}",
             "justMyCode": true,
             "subProcess": false,
+            "preLaunchTask": "sceneplay: stop deployed instance",
+            "postDebugTask": "sceneplay: restart deployed instance",
             "env": {
-                "SP_INTEGRATIONS": "0",
-                "SP_CRON_APPLY": "0",
-                "SP_DB_PATH": "${workspaceFolder}/dev.db"
+                "SP_INTEGRATIONS": "1",
+                "SP_CRON_APPLY": "1"
             },
             "windows": {
                 "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
@@ -43,12 +50,13 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "subProcess": false,
+            "preLaunchTask": "sceneplay: stop deployed instance",
+            "postDebugTask": "sceneplay: restart deployed instance",
             "env": {
                 "SP_PORT": "8086",
                 "SP_INTEGRATIONS": "0",
                 "SP_CRON_APPLY": "0",
-                "SP_MPV_SOCKET_PREFIX": "/tmp/mpvsocket-dev-",
-                "SP_DB_PATH": "${workspaceFolder}/dev.db"
+                "SP_MPV_SOCKET_PREFIX": "/tmp/mpvsocket-dev-"
             },
             "windows": {
                 "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"

@@ -91,7 +91,7 @@ Then save and exit: press **Ctrl+X**, then **Y**, then **Enter**.
 ```bash
 sudo apt-get update && sudo apt-get -y upgrade
 cd ~
-git clone https://github.com/ScenePlay/ScenePlay_Flask_Media_Wrapper ScenePlay
+git clone https://github.com/ScenePlay/ScenePlay ScenePlay
 ```
 
 (The folder must be called `ScenePlay` in your home folder — the scripts

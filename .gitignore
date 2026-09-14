@@ -208,3 +208,4 @@ instance/jwt_secret
 dev.db
 dev.db-wal
 dev.db-shm
+sceneplay_launch.log

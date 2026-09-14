@@ -1100,24 +1100,31 @@ def obs_scene_for_sceneplay_scene(scene_id):
 
 # ── config ────────────────────────────────────────────────────────────────────
 
+_NO_INTEGRATIONS = ('OBS control is switched off on this instance (SP_INTEGRATIONS=0) — '
+                    'start the app with integrations enabled to connect to OBS.')
+
 @router.post('/toggle')
 def toggle(user=Depends(require_dm)):
     import integrations.obs_ws as obs_ws
     import integrations.relay_guard as relay_guard
     current = appsettingGet('obs_enabled', '0')
     new_val = '0' if current == '1' else '1'
+    if new_val == '1' and not config.INTEGRATIONS:
+        # SP_INTEGRATIONS=0: a dev copy never dials a real OBS. Say so instead
+        # of flipping the switch and promising a connection that never comes
+        # (same contract as the relay toggle). Disabling below stays local.
+        return {'ok': False, 'enabled': False, 'message': _NO_INTEGRATIONS}
     appsettingSet('obs_enabled', new_val)
 
     if new_val == '1':
         # Same crash guard as the boot auto-start: if this enable takes the
         # box down, the next start skips OBS instead of boot-looping.
         appsettingSet('obs_boot_tripped', '')
-        if config.INTEGRATIONS:      # SP_INTEGRATIONS=0: a dev copy never dials a real OBS
-            relay_guard.arm(relay_guard.OBS_GUARD_PATH)
-            obs_ws.start(_appctx)
-            start_feed_watch(_appctx)
-            start_dice_watch(_appctx)
-            relay_guard.disarm_after_grace(relay_guard.OBS_GUARD_PATH)
+        relay_guard.arm(relay_guard.OBS_GUARD_PATH)
+        obs_ws.start(_appctx)
+        start_feed_watch(_appctx)
+        start_dice_watch(_appctx)
+        relay_guard.disarm_after_grace(relay_guard.OBS_GUARD_PATH)
         message = 'OBS control enabled — connecting.'
     else:
         obs_ws.stop()

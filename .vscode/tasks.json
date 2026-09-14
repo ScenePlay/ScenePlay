@@ -1,0 +1,31 @@
+{
+    // Hand-off between the deployed appliance and the debugger. Only one
+    // instance can own :8086 (core/boot.py refuses a second one), so F5 first
+    // stops the copy started at login (~/ScenePlay/startApp.sh on Linux,
+    // startApp.bat on Windows) and, when the debug session ends, starts it
+    // again. The bracket in 'ScenePlay/[w]s.py' keeps pkill from matching the
+    // task's own shell.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "sceneplay: stop deployed instance",
+            "type": "shell",
+            "command": "pkill -TERM -f 'ScenePlay/[w]s.py' 2>/dev/null; for i in $(seq 1 30); do ss -ltn | grep -q ':8086 ' || { echo 'port 8086 free'; exit 0; }; sleep 0.5; done; echo 'port 8086 still busy'; exit 1",
+            "windows": {
+                "command": "powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*ScenePlay*ws.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-Sleep -Seconds 2\""
+            },
+            "presentation": { "reveal": "silent", "close": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "sceneplay: restart deployed instance",
+            "type": "shell",
+            "command": "if [ -x ~/ScenePlay/startApp.sh ]; then for i in $(seq 1 20); do ss -ltn | grep -q ':8086 ' || break; sleep 0.5; done; setsid nohup ~/ScenePlay/startApp.sh >> \"${workspaceFolder}/sceneplay_launch.log\" 2>&1 < /dev/null & disown; echo 'deployed instance restarting'; else echo 'no deployed instance here (~/ScenePlay/startApp.sh missing)'; fi",
+            "windows": {
+                "command": "powershell -NoProfile -Command \"Start-Process -FilePath '${workspaceFolder}\\startApp.bat' -WorkingDirectory '${workspaceFolder}' -WindowStyle Minimized\""
+            },
+            "presentation": { "reveal": "silent", "close": true },
+            "problemMatcher": []
+        }
+    ]
+}
