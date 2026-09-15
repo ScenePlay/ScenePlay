@@ -165,3 +165,13 @@ def test_malformed_meter_frame_leaves_levels_alone(ws, monkeypatch):
     ow._handle_event('InputVolumeMeters', {'inputs': [
         {'inputName': 'Quiet', 'inputLevelsMul': [['x']]}]})
     assert ow.levels()[0] == {'Quiet': [0.0]}
+
+
+def test_ensure_item_adds_an_existing_input_once(ws):
+    ws['replies']['GetSceneItemList'] = {'sceneItems': [{'sourceName': 'Player - Carl Cam', 'sceneItemId': 7}]}
+    assert ow.ensure_item('Player - Carl', 'Player - Carl Cam') == 7
+    assert not any(r == 'CreateSceneItem' for r, _ in ws['sent'])
+    ws['replies']['GetSceneItemList'] = {'sceneItems': []}
+    ws['replies']['CreateSceneItem'] = {'sceneItemId': 42}
+    assert ow.ensure_item('Player - Carl', 'Player - Carl Overlay') == 42
+    assert ('CreateSceneItem', {'sceneName': 'Player - Carl', 'sourceName': 'Player - Carl Overlay', 'sceneItemEnabled': True}) in ws['sent']

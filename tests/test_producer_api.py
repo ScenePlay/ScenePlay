@@ -81,14 +81,15 @@ def _party(monkeypatch, names=('Carl',)):
     return chars
 
 
-def test_open_turns_studio_mode_on_and_pauses_auto_cam(dm_client, obs, fresh, monkeypatch):
+def test_open_turns_studio_mode_on_and_leaves_auto_cam_running(dm_client, obs, fresh, monkeypatch):
     from sql import appsettingGet
     _party(monkeypatch)
     r = dm_client.post('/ttrpg/producer/api/session')
     body = r.get_json()
     assert r.status_code == 200 and body['ok'] and body['console_id'] and body['consoles'] == 1
     assert ('studio', True) in obs['calls'] and ('meters', True) in obs['calls']
-    assert appsettingGet(fresh.PAUSE_KEY, '0') == '1'
+    assert appsettingGet(fresh.PAUSE_KEY, '0') == '0'          # auto-cam is on by default
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['auto_cam_paused'] is False
     assert fresh.producer_active() is True
 
 
@@ -98,6 +99,7 @@ def test_reset_after_restart_clears_pause(dm_client, obs, fresh, monkeypatch):
     from sql import appsettingGet
     _party(monkeypatch)
     dm_client.post('/ttrpg/producer/api/session')
+    dm_client.post('/ttrpg/producer/api/auto-cam-pause', json={'paused': True})   # the producer paused it
     fresh._armed['key'] = 'map'
     assert appsettingGet(fresh.PAUSE_KEY, '0') == '1'
     fresh.reset_after_restart()
@@ -148,11 +150,11 @@ def test_pause_toggle(dm_client, obs, fresh, monkeypatch):
     from sql import appsettingGet
     _party(monkeypatch)
     dm_client.post('/ttrpg/producer/api/session')
-    r = dm_client.post('/ttrpg/producer/api/auto-cam-pause', json={'paused': False})
-    assert r.get_json() == {'ok': True, 'paused': False}
-    assert appsettingGet(fresh.PAUSE_KEY, '0') == '0'
     r = dm_client.post('/ttrpg/producer/api/auto-cam-pause', json={'paused': True})
-    assert r.get_json()['paused'] is True and appsettingGet(fresh.PAUSE_KEY, '0') == '1'
+    assert r.get_json() == {'ok': True, 'paused': True}
+    assert appsettingGet(fresh.PAUSE_KEY, '0') == '1'
+    r = dm_client.post('/ttrpg/producer/api/auto-cam-pause', json={'paused': False})
+    assert r.get_json()['paused'] is False and appsettingGet(fresh.PAUSE_KEY, '0') == '0'
 
 
 def test_last_close_turns_studio_mode_off_after_grace(dm_client, obs, fresh, monkeypatch):
@@ -281,7 +283,7 @@ def test_state_document(dm_client, obs, fresh, monkeypatch):
     assert keys == ['party', 'map', 'char:1', 'dm', 'pre', 'intermission', 'post']
     carl = next(s for s in d['shots'] if s['key'] == 'char:1')
     assert carl == {'key': 'char:1', 'label': 'Carl', 'scene': 'Player - Carl',
-                    'kind': 'player', 'built': True, 'character_id': 1}
+                    'kind': 'player', 'built': True, 'character_id': 1, 'hotkey': '1'}
     pre = next(s for s in d['shots'] if s['key'] == 'pre')
     assert pre['built'] is False and pre['kind'] == 'special'
     assert d['transitions'] == ['Cut', 'Fade'] and d['transition'] == 'Cut' and d['transition_ms'] == 300
@@ -415,7 +417,7 @@ def test_arm_when_disconnected(dm_client, obs, fresh, monkeypatch):
 def test_take_with_nothing_armed(dm_client, obs, fresh, monkeypatch):
     _party(monkeypatch)
     body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
-    assert body == {'ok': False, 'error': 'Nothing armed.'}
+    assert body == {'ok': False, 'error': 'Nothing armed — arm a shot first (click a tile or press its key), then Take or Auto.'}
     assert not any(c[0] == 'take' for c in obs['calls'])
 
 
@@ -427,13 +429,16 @@ def test_take_uses_chosen_transition_and_tags_the_cut(dm_client, obs, fresh, mon
     dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
     r = dm_client.post('/ttrpg/producer/api/take', json={'transition': 'Cut'})
     assert r.get_json() == {'ok': True, 'scene': 'ScenePlay Map', 'transition': 'Cut'}
-    assert ('transition', 'Cut', None) in obs['calls'] and ('take',) in obs['calls']
+    assert ('transition', 'Cut', 300) in obs['calls'] and ('take',) in obs['calls']   # 300 = OBS's own duration, nothing saved
     assert ('cut', {'target': 'map', 'scene': 'ScenePlay Map', 'by': 'producer'}) in emitted
     assert dm_client.get('/ttrpg/producer/api/state').get_json()['armed'] is None
 
 
 def test_auto_is_a_fade_take(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as ro
     _party(monkeypatch)
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'warnings': []})
+    monkeypatch.setattr(ro, '_set_featured', lambda cid: None)
     dm_client.post('/ttrpg/producer/api/arm', json={'key': 'dm'})
     r = dm_client.post('/ttrpg/producer/api/auto', json={'ms': 500})
     assert r.get_json() == {'ok': True, 'scene': 'DM - Jankis', 'transition': 'Fade'}
@@ -494,7 +499,7 @@ def test_second_take_without_rearming_is_refused(dm_client, obs, fresh, monkeypa
     obs['state']['current_scene'] = 'ScenePlay Map'          # what OBS reports after the cut
     obs['calls'].clear()
     body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
-    assert body == {'ok': False, 'error': 'Nothing armed.'}
+    assert body == {'ok': False, 'error': 'Nothing armed — arm a shot first (click a tile or press its key), then Take or Auto.'}
     assert not any(c[0] == 'take' for c in obs['calls'])
 
 
@@ -650,3 +655,337 @@ def test_levels(dm_client, obs, fresh, monkeypatch):
     monkeypatch.setattr(obs_ws, 'levels', lambda: ({'ScenePlay Music': [0.5, 0.4]}, time.monotonic() - 0.25))
     body = dm_client.get('/ttrpg/producer/api/levels').get_json()
     assert body['levels'] == {'ScenePlay Music': [0.5, 0.4]} and 200 <= body['age_ms'] <= 2000
+
+
+# ── closeup scenes ───────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def closeup_rig(obs, monkeypatch):
+    """Party scene already built for Carl (cam + overlay) and the DM (cam only);
+    the per-character closeup scenes do not exist yet."""
+    import integrations.obs_ws as obs_ws
+    scenes = {'ScenePlay Party': {'Player - Carl Cam': 11, 'Player - Carl Overlay': 12, 'DM - Jankis Cam': 13}}
+    ids = iter(range(100, 200))
+
+    def scene_items(scene, timeout=3):
+        if scene not in scenes:
+            raise obs_ws.ObsRejected(600, 'no such scene')
+        return dict(scenes[scene])
+
+    def ensure_scene(scene, timeout=3):
+        scenes.setdefault(scene, {})
+        obs['calls'].append(('ensure_scene', scene))
+
+    def ensure_item(scene, source, timeout=5):
+        item = scenes[scene].get(source)
+        if item is None:
+            item = scenes[scene][source] = next(ids)
+        obs['calls'].append(('ensure_item', scene, source))
+        return item
+
+    monkeypatch.setattr(obs_ws, 'scene_items', scene_items)
+    monkeypatch.setattr(obs_ws, 'ensure_scene', ensure_scene)
+    monkeypatch.setattr(obs_ws, 'ensure_item', ensure_item)
+    monkeypatch.setattr(obs_ws, 'ensure_nested_scene', lambda parent, child, timeout=5: obs['calls'].append(('nest', parent, child)) or 900)
+    monkeypatch.setattr(obs_ws, 'place_item', lambda scene, item, rect, timeout=3: obs['calls'].append(('place', scene, item, rect)))
+    monkeypatch.setattr(obs_ws, 'set_item_enabled', lambda scene, item, on, timeout=3: obs['calls'].append(('enable', scene, item, on)))
+    obs['state']['base_width'], obs['state']['base_height'] = 1280, 720
+    return scenes
+
+
+def test_build_closeups_reuses_the_party_inputs_full_frame(dm_client, obs, fresh, closeup_rig, monkeypatch):
+    _party(monkeypatch, names=('Carl', 'Donut'))          # Donut has no tile in the party scene yet
+    r = dm_client.post('/ttrpg/producer/api/build-closeups')
+    body = r.get_json()
+    assert body['ok'] is True
+    assert body['built'] == ['Player - Carl', 'DM - Jankis'] and body['skipped'] == ['Donut']
+    assert 'Player - Carl' in closeup_rig and 'DM - Jankis' in closeup_rig and 'Player - Donut' not in closeup_rig
+    assert closeup_rig['Player - Carl'] == {'Player - Carl Cam': 100, 'Player - Carl Overlay': 101}
+    assert closeup_rig['DM - Jankis'] == {'DM - Jankis Cam': 102}
+    full = {'x': 0, 'y': 0, 'w': 1280, 'h': 720}
+    assert ('place', 'Player - Carl', 100, full) in obs['calls'] and ('place', 'Player - Carl', 101, full) in obs['calls']
+    assert ('enable', 'DM - Jankis', 102, True) in obs['calls']
+
+
+def test_build_closeups_is_idempotent(dm_client, obs, fresh, closeup_rig, monkeypatch):
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/build-closeups')
+    first = dict(closeup_rig['Player - Carl'])
+    dm_client.post('/ttrpg/producer/api/build-closeups')
+    assert closeup_rig['Player - Carl'] == first          # same items, nothing duplicated
+
+
+def test_build_closeups_refreshes_the_shot_list(dm_client, obs, fresh, closeup_rig, monkeypatch):
+    """The shots cache must not keep reporting 'not built' after a build."""
+    _party(monkeypatch)
+    obs['state']['scenes'] = ['ScenePlay Party', 'ScenePlay Map']      # no closeup scenes yet
+    assert next(s for s in dm_client.get('/ttrpg/producer/api/state').get_json()['shots'] if s['key'] == 'char:1')['built'] is False
+    dm_client.post('/ttrpg/producer/api/build-closeups')
+    obs['state']['scenes'] = obs['state']['scenes'] + ['Player - Carl', 'DM - Jankis']
+    assert next(s for s in dm_client.get('/ttrpg/producer/api/state').get_json()['shots'] if s['key'] == 'char:1')['built'] is True
+
+
+def test_build_closeups_error_paths(dm_client, obs, fresh, closeup_rig, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    _party(monkeypatch)
+    obs['flags']['connected'] = False
+    assert dm_client.post('/ttrpg/producer/api/build-closeups').get_json() == {'ok': False, 'error': 'OBS is not connected.'}
+    obs['flags']['connected'] = True
+
+    def boom(scene, timeout=3):
+        raise obs_ws.ObsRejected(500, 'nope')
+    monkeypatch.setattr(obs_ws, 'ensure_scene', boom)
+    body = dm_client.post('/ttrpg/producer/api/build-closeups').get_json()
+    assert body['ok'] is False and 'nope' in body['error']
+
+
+def test_taking_a_player_shot_features_them_in_the_party_scene(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as ro
+    _party(monkeypatch)
+    obs['state']['scenes'] = obs['state']['scenes'] + ['Player - Carl']
+    featured = []
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: featured.append(featured_id) or {'warnings': []})
+    monkeypatch.setattr(ro, '_set_featured', lambda cid: featured.append(('set', cid)))
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'char:1'})
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body['ok'] is True and body['scene'] == 'Player - Carl'
+    assert featured == [1, ('set', 1)]
+    featured.clear()
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
+    dm_client.post('/ttrpg/producer/api/take', json={})
+    assert featured == []                                   # only player shots feature
+
+
+def test_feature_failure_does_not_fail_the_take(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    import routers.obs as ro
+    _party(monkeypatch)
+    obs['state']['scenes'] = obs['state']['scenes'] + ['Player - Carl']
+
+    def boom(featured_id=None):
+        raise obs_ws.ObsRejected(500, 'layout failed')
+    monkeypatch.setattr(ro, '_sync_party_scene', boom)
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'char:1'})
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body['ok'] is True and 'layout failed' in body['warning']
+
+
+def test_build_party_also_builds_closeups(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as ro
+    import routers.producer as p
+    calls = []
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'scene': 'ScenePlay Party', 'tiles': [], 'warnings': []})
+    monkeypatch.setattr(ro, 'ensure_map_scene', lambda: ('ScenePlay Map', []))
+    monkeypatch.setattr(ro, 'ensure_show_scenes', lambda: ({}, []))
+    monkeypatch.setattr(ro, '_build_audio', lambda w, h, warnings: None)
+    monkeypatch.setattr(ro, '_scene_inventory', lambda names: {})
+    # build-party also starts the feed/cam watchers — real timer threads that
+    # would outlive this test and bleed into the rest of the session
+    monkeypatch.setattr(ro, 'start_feed_watch', lambda app_obj: None)
+    monkeypatch.setattr(p, 'build_closeups', lambda: calls.append('closeups') or {'built': ['Player - Carl'], 'skipped': []})
+    r = dm_client.post('/ttrpg/obs/api/build-party')
+    assert r.status_code == 200 and calls == ['closeups']
+    assert r.get_json()['closeups'] == ['Player - Carl']
+
+
+def test_build_closeups_carries_the_party_audio(dm_client, obs, fresh, closeup_rig, monkeypatch):
+    """Like Build does for Map / Pre / Post: the party scene rides inside each
+    closeup off-canvas, so every voice and the music survive the cut."""
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/build-closeups')
+    nested = [c[1:] for c in obs['calls'] if c[0] == 'nest']
+    assert nested == [('Player - Carl', 'ScenePlay Party'), ('DM - Jankis', 'ScenePlay Party')]
+    off_canvas = {'x': 1280 + 100, 'y': 0, 'w': 320, 'h': 180}
+    assert ('place', 'Player - Carl', 900, off_canvas) in obs['calls'] and ('enable', 'Player - Carl', 900, True) in obs['calls']
+
+
+def test_shots_carry_the_broadcast_page_hotkeys(dm_client, obs, fresh, monkeypatch):
+    """1–9 count the players in tile order like the Broadcast page; 0 is the
+    whole party; B map, I intermission; pre/post have no key."""
+    _party(monkeypatch, names=('Carl', 'Donut'))
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert [(s['key'], s['hotkey']) for s in d['shots']] == [
+        ('party', '0'), ('map', 'B'), ('char:1', '1'), ('char:2', '2'), ('dm', '3'),
+        ('pre', ''), ('intermission', 'I'), ('post', '')]
+
+
+def test_state_defaults_to_the_broadcast_page_transition(dm_client, obs, fresh, monkeypatch):
+    from sql import appsettingSet
+    _party(monkeypatch)
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['transition'] == 'Cut' and d['transition_ms'] == 300          # nothing saved: OBS's own
+    appsettingSet('obs_transition', 'Fade')
+    appsettingSet('obs_transition_ms', '700')
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['transition'] == 'Fade' and d['transition_ms'] == 700
+
+
+def test_take_without_a_transition_uses_the_saved_default(dm_client, obs, fresh, monkeypatch):
+    from sql import appsettingSet
+    _party(monkeypatch)
+    appsettingSet('obs_transition', 'Fade')
+    appsettingSet('obs_transition_ms', '700')
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
+    body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
+    assert body['ok'] is True and body['transition'] == 'Fade'
+    assert ('transition', 'Fade', 700) in obs['calls']
+
+
+# ── spotlight (feature inside the party scene) ───────────────────────────────
+
+@pytest.fixture()
+def spot(monkeypatch):
+    """Recording stubs of the party-layout machinery. `_do_feature` and
+    `_unfeature` (the Broadcast page's handlers) are poisoned: they cut
+    program to the party scene, which the console's spotlight must never do."""
+    import routers.obs as ro
+    calls = []
+
+    def never(*a, **k):
+        raise AssertionError('the console spotlight must not cut program')
+    monkeypatch.setattr(ro, '_do_feature', never)
+    monkeypatch.setattr(ro, '_unfeature', never)
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: calls.append(('layout', featured_id)) or {'warnings': []})
+    monkeypatch.setattr(ro, '_set_featured', lambda cid: calls.append(('set', cid)))
+    monkeypatch.setattr(ro, '_cancel_return', lambda: calls.append(('cancel_return',)))
+    monkeypatch.setattr(ro, 'featured_id', lambda: next((c[1] for c in reversed(calls) if c[0] == 'set'), None))
+    monkeypatch.setattr(ro, '_emit', lambda kind, **x: calls.append(('emit', kind)))
+    return calls
+
+
+def test_spotlight_features_a_player_without_cutting(dm_client, obs, fresh, spot, monkeypatch):
+    _party(monkeypatch)
+    obs['state']['current_scene'] = 'ScenePlay Map'            # program is elsewhere and must stay there
+    r = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'char:1'})
+    assert r.get_json() == {'ok': True, 'featured': 'char:1', 'featured_id': 1}
+    assert spot == [('layout', 1), ('set', 1), ('emit', 'feature')]
+    assert not any(c[0] == 'switch' for c in obs['calls'])
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['featured_id'] == 1
+
+
+def test_spotlight_group_evens_the_table_without_cutting(dm_client, obs, fresh, spot, monkeypatch):
+    _party(monkeypatch)
+    r = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': ''})
+    assert r.get_json() == {'ok': True, 'featured': None, 'featured_id': None}
+    assert spot == [('layout', None), ('set', None), ('cancel_return',), ('emit', 'group')]
+
+
+def test_spotlight_rejects_specials_and_disconnected(dm_client, obs, fresh, spot, monkeypatch):
+    _party(monkeypatch)
+    assert dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'map'}).status_code == 400
+    assert dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'nope'}).status_code == 400
+    obs['flags']['connected'] = False
+    assert dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'char:1'}).get_json() == {'ok': False, 'error': 'OBS is not connected.'}
+    assert spot == []
+
+
+def test_spotlight_reports_a_refused_layout(dm_client, obs, fresh, spot, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    import routers.obs as ro
+    _party(monkeypatch)
+
+    def boom(featured_id=None):
+        raise obs_ws.ObsRejected(500, 'busy')
+    monkeypatch.setattr(ro, '_sync_party_scene', boom)
+    body = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'dm'}).get_json()
+    assert body == {'ok': False, 'error': 'OBS refused: busy'}
+
+
+def test_state_carries_the_scene_links(dm_client, obs, fresh, monkeypatch):
+    """The DM screen's scene → OBS scene links, so a tile can show where a
+    ScenePlay activation will cut OBS (and whether the link is live at all)."""
+    from models.ttrpg import tblObsSceneMap
+    from sql import appsettingSet
+    db.session.add(tblObsSceneMap(entity_type='scene', entity_id=25, entity_key='', scene_name='ScenePlay Pre'))
+    db.session.commit()
+    appsettingSet('obs_enabled', '1'); appsettingSet('obs_scene_link', '0')
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['scene_links'] == {'25': 'ScenePlay Pre'} and d['scene_links_live'] is False
+    appsettingSet('obs_scene_link', '1')
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['scene_links_live'] is True
+
+
+# ── connecting to OBS from the console ───────────────────────────────────────
+
+def test_state_carries_the_obs_connection_info(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    from sql import appsettingSet
+    appsettingSet('obs_enabled', '0'); appsettingSet('obs_host', '10.0.4.33'); appsettingSet('obs_port', '4455')
+    monkeypatch.setattr(obs_ws, 'state', lambda: 'disabled')
+    monkeypatch.setattr(obs_ws, 'last_error', lambda: '2026-09-15 10:00:00|connect|refused')
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['obs'] == {'enabled': False, 'state': 'disabled', 'error': 'refused', 'target': '10.0.4.33:4455'}
+    appsettingSet('obs_enabled', '1'); monkeypatch.setattr(obs_ws, 'state', lambda: 'connected'); monkeypatch.setattr(obs_ws, 'last_error', lambda: '')
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['obs'] == {'enabled': True, 'state': 'connected', 'error': '', 'target': '10.0.4.33:4455'}
+
+
+def test_connect_enables_obs_control_when_it_is_off(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as ro
+    from sql import appsettingSet
+    appsettingSet('obs_enabled', '0')
+    calls = []
+    monkeypatch.setattr(ro, 'enable_obs', lambda: calls.append('enable') or {'ok': True, 'enabled': True, 'message': 'OBS control enabled — connecting.'})
+    r = dm_client.post('/ttrpg/producer/api/obs/connect')
+    assert r.get_json() == {'ok': True, 'enabled': True, 'message': 'OBS control enabled — connecting.'}
+    assert calls == ['enable']
+
+
+def test_connect_reconnects_when_control_is_already_on(dm_client, obs, fresh, monkeypatch):
+    import integrations.obs_ws as obs_ws
+    import routers.obs as ro
+    from sql import appsettingSet
+    appsettingSet('obs_enabled', '1')
+    calls = []
+    monkeypatch.setattr(ro, 'enable_obs', lambda: calls.append('enable'))
+    monkeypatch.setattr(obs_ws, 'restart', lambda: calls.append('restart'))
+    r = dm_client.post('/ttrpg/producer/api/obs/connect')
+    assert r.get_json() == {'ok': True, 'enabled': True, 'message': 'Reconnecting to OBS.'}
+    assert calls == ['restart']
+
+
+def test_enable_obs_is_what_the_toggle_uses(dm_client, obs, fresh, monkeypatch):
+    """The Broadcast page's Enable and the console's Connect share one path."""
+    import core.config as config
+    import integrations.obs_ws as obs_ws
+    import integrations.relay_guard as relay_guard
+    import routers.obs as ro
+    from sql import appsettingGet, appsettingSet
+    monkeypatch.setattr(config, 'INTEGRATIONS', True)
+    appsettingSet('obs_enabled', '0'); appsettingSet('obs_boot_tripped', 'yesterday')
+    calls = []
+    monkeypatch.setattr(obs_ws, 'start', lambda app: calls.append('start'))
+    monkeypatch.setattr(ro, 'start_feed_watch', lambda app: calls.append('feed'))
+    monkeypatch.setattr(ro, 'start_dice_watch', lambda app: calls.append('dice'))
+    monkeypatch.setattr(relay_guard, 'arm', lambda *a, **k: calls.append('arm'))
+    monkeypatch.setattr(relay_guard, 'disarm_after_grace', lambda *a, **k: calls.append('disarm'))
+    monkeypatch.setattr(ro, '_emit', lambda *a, **k: None)
+    out = ro.enable_obs()
+    assert out == {'ok': True, 'enabled': True, 'message': 'OBS control enabled — connecting.'}
+    assert calls == ['arm', 'start', 'feed', 'dice', 'disarm']
+    assert appsettingGet('obs_enabled', '0') == '1' and appsettingGet('obs_boot_tripped', 'x') == ''
+    monkeypatch.setattr(config, 'INTEGRATIONS', False)
+    assert ro.enable_obs()['ok'] is False
+
+
+def test_state_scenes_are_the_active_sessions_campaign_scenes(dm_client, obs, fresh, monkeypatch):
+    """Same list the DM's session and battle-map screens show: the active
+    session's campaign, enabled scenes only, in DM order, with the OBS link."""
+    from models.scenes import tblscenes
+    from models.ttrpg import tblSessions, tblObsSceneMap
+    db.session.add_all([
+        tblscenes(sceneName='Tavern', active=1, orderBy=2, campaign_id=7),
+        tblscenes(sceneName='Forest', active=1, orderBy=1, campaign_id=7),
+        tblscenes(sceneName='Retired', active=0, orderBy=3, campaign_id=7),
+        tblscenes(sceneName='Other campaign', active=1, orderBy=1, campaign_id=8),
+    ])
+    db.session.commit()
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['scenes'] == []      # no active session yet
+    db.session.add(tblSessions(title='Night 3', session_number=3, campaign_id=7, status='active', created_at='2026-09-15 19:00:00'))
+    db.session.commit()
+    forest = tblscenes.query.filter_by(sceneName='Forest').first()
+    db.session.add(tblObsSceneMap(entity_type='scene', entity_id=forest.scene_ID, entity_key='', scene_name='ScenePlay Map'))
+    db.session.commit()
+    scenes = dm_client.get('/ttrpg/producer/api/state').get_json()['scenes']
+    assert [s['sceneName'] for s in scenes] == ['Forest', 'Tavern']
+    assert scenes[0]['obs_scene'] == 'ScenePlay Map' and scenes[1]['obs_scene'] is None
+    assert set(scenes[0]) == {'scene_ID', 'sceneName', 'obs_scene'}

@@ -2,8 +2,9 @@
 from (/ttrpg/producer, spec: docs/superpowers/specs/2026-09-14-producer-console-core-design.md).
 
 Lifecycle: the first console to open turns OBS Studio Mode and the audio
-meter stream on and pauses auto-cam; STUDIO_OFF_GRACE_S after the last console
-closes (or stops pinging) everything is put back. The rest of the OBS
+meter stream on (auto-cam keeps running unless the producer pauses it from the
+console); STUDIO_OFF_GRACE_S after the last console closes (or stops pinging)
+everything is put back, including any pause. The rest of the OBS
 integration keeps switching Program directly, which Studio Mode allows.
 """
 import json
@@ -186,7 +187,9 @@ def open_console():
     if sweep_t is not None:
         sweep_t.start()
     if first:
-        appsettingSet(PAUSE_KEY, '1')
+        # Auto-cam keeps running while a console is open (Eric's call, 2026-09-15):
+        # the producer can pause it with the console's toggle when they want the
+        # shots to themselves; the pause is lifted again when the last console leaves.
         _studio(True)
     # The session clock belongs to THIS sitting: keep a start that a console
     # opened earlier tonight, replace one left over from a previous session
@@ -266,23 +269,78 @@ def shots():
     return [dict(s) for s in out]
 
 
+def _invalidate_shots():
+    _shots_cache['at'] = 0.0
+
+
+# ── closeup scenes ───────────────────────────────────────────────────────────
+
+def build_closeups():
+    """One OBS scene per on-stream member, named exactly as the console's
+    shot (`Player - Carl`, `DM - Jankis`), holding that member's party-scene
+    inputs full-frame: the cam source and, when they have one, the overlay
+    (name strip / stat card). The inputs are SHARED with the party scene —
+    OBS lets one input live in several scenes — so no second feed is opened.
+    Members without a tile in the party scene yet are skipped (run Build).
+    Raises ObsUnavailable / ObsRejected like the rest of the OBS surface."""
+    snap = obs_ws.current_state()
+    w, h = snap.get('base_width') or 1920, snap.get('base_height') or 1080
+    full = {'x': 0, 'y': 0, 'w': w, 'h': h}
+    party = obs.party_scene_name()
+    party_items = obs_ws.scene_items(party)
+    off_canvas = {'x': int(w) + 100, 'y': 0, 'w': 320, 'h': 180}
+    built, skipped = [], []
+    for char in obs._ordered_party():
+        cam = obs._source_name_for(char)
+        if cam not in party_items:
+            skipped.append(char.name)
+            continue
+        scene = obs._scene_name_for(char)
+        obs_ws.ensure_scene(scene)
+        for source in (cam, obs._overlay_source_name_for(char)):
+            if source not in party_items:
+                continue
+            item_id = obs_ws.ensure_item(scene, source)
+            obs_ws.place_item(scene, item_id, full)
+            obs_ws.set_item_enabled(scene, item_id, True)
+        # Carry the table's sound into the closeup exactly as Build does for
+        # the map and show cards: the party scene nested off-canvas — heard,
+        # never seen — so a closeup silences nobody.
+        audio = obs_ws.ensure_nested_scene(scene, party)
+        if audio is not None:
+            obs_ws.place_item(scene, audio, off_canvas)
+            obs_ws.set_item_enabled(scene, audio, True)
+        built.append(scene)
+    _invalidate_shots()
+    _emit_state()
+    return {'built': built, 'skipped': skipped}
+
+
+# Hotkeys mirror the Broadcast page: 1-9 are the tiles in party order (the
+# DM rides along in that order), 0 is the whole party, B the battle map, I the
+# intermission card. Pre/post are click-only.
+SPECIAL_HOTKEYS = {'party': '0', 'map': 'B', 'intermission': 'I'}
+
+
 def _build_shots(built):
     out = []
 
     def special(key):
         scene = obs._cut_scene_name(key)
         out.append({'key': key, 'label': obs.CUT_TARGETS[key][1], 'scene': scene,
-                    'kind': 'special', 'built': scene in built, 'character_id': None})
+                    'kind': 'special', 'built': scene in built, 'character_id': None,
+                    'hotkey': SPECIAL_HOTKEYS.get(key, '')})
 
     for key in SPECIALS_FRONT:
         special(key)
-    for char in obs._ordered_party():
+    for n, char in enumerate(obs._ordered_party(), start=1):
         is_dm = char.character_id == obs.DM_TILE_ID
         scene = obs._scene_name_for(char)
         out.append({'key': 'dm' if is_dm else f'char:{char.character_id}',
                     'label': char.name, 'scene': scene,
                     'kind': 'dm' if is_dm else 'player', 'built': scene in built,
-                    'character_id': char.character_id})
+                    'character_id': char.character_id,
+                    'hotkey': str(n) if n <= 9 else ''})
     for key in SPECIALS_BACK:
         special(key)
     return out
@@ -303,6 +361,43 @@ def _markers():
     except ValueError:
         return []
     return rows if isinstance(rows, list) else []
+
+
+def _obs_info():
+    """Enough for the console to say WHY OBS is not connected and offer the
+    fix: switched off, still connecting, refused the password, unsupported.
+    Never the password; host:port only."""
+    host = (appsettingGet('obs_host', '') or '').strip() or obs_ws.DEFAULT_HOST
+    port = (appsettingGet('obs_port', '') or '').strip() or str(obs_ws.DEFAULT_PORT)
+    err = obs_ws.last_error() or ''
+    return {'enabled': (appsettingGet('obs_enabled', '0') or '0') == '1',
+            'state': obs_ws.state(),
+            'error': err.split('|', 2)[-1] if err else '',
+            'target': f'{host}:{port}'}
+
+
+def _session_scenes():
+    """The ScenePlay scenes the console offers: exactly what the DM's session
+    and battle-map screens list — the active session's campaign, enabled
+    scenes only, in the DM's order — each with its OBS scene link."""
+    from models.scenes import tblscenes
+    from models.ttrpg import tblSessions
+    sess = tblSessions.query.filter_by(status='active').first()
+    if not sess or sess.campaign_id is None:
+        return []
+    links = _scene_links()
+    rows = (tblscenes.query.filter_by(campaign_id=sess.campaign_id, active=1)
+            .order_by(tblscenes.orderBy).all())
+    return [{'scene_ID': r.scene_ID, 'sceneName': r.sceneName,
+             'obs_scene': links.get(str(r.scene_ID))} for r in rows]
+
+
+def _scene_links():
+    """{ScenePlay scene_ID (str): OBS scene name} — the DM screen's links,
+    followed by /activatescenes/ when obs_scene_link is on."""
+    from models.ttrpg import tblObsSceneMap
+    return {str(r.entity_id): r.scene_name
+            for r in tblObsSceneMap.query.filter_by(entity_type='scene').all() if r.scene_name}
 
 
 def _session_info():
@@ -339,14 +434,19 @@ def state_doc():
         'armed': _armed['key'],
         'shots': shots(),
         'transitions': [t['name'] for t in snap.get('transitions') or []],
-        'transition': snap.get('current_transition', ''),
-        'transition_ms': snap.get('transition_ms', 0),
+        'transition': _saved_transition(snap)[0],
+        'transition_ms': _saved_transition(snap)[1],
         'recording': bool(snap.get('recording')),
         'streaming': bool(snap.get('streaming')),
         'record_timecode': snap.get('record_timecode', ''),
         'stream_timecode': snap.get('stream_timecode', ''),
         'last_switch': snap.get('last_switch'),
         'auto_cam': obs.auto_cam_setting(),
+        'featured_id': obs.featured_id(),
+        'obs': _obs_info(),
+        'scene_links': _scene_links(),
+        'scenes': _session_scenes(),
+        'scene_links_live': obs.scene_links_live(),
         'auto_cam_paused': (appsettingGet(PAUSE_KEY, '0') or '0') == '1',
         'countdown_until': countdown_until,
         'clock_start': clock_start,
@@ -425,13 +525,27 @@ def api_arm(data: dict = Depends(json_body), user=Depends(require_dm)):
     return {'ok': True, 'armed': key, 'scene': s['scene']}
 
 
+def _saved_transition(snap=None):
+    """The Broadcast page's transition (obs_transition / obs_transition_ms)
+    when the DM saved one, else whatever OBS has selected. The console's
+    dropdown starts here and a Take that names nothing uses it."""
+    snap = snap or obs_ws.current_state()
+    name = (appsettingGet('obs_transition', '') or '').strip() or snap.get('current_transition', '')
+    raw = (appsettingGet('obs_transition_ms', '') or '').strip()
+    try:
+        ms = int(raw) if raw else int(snap.get('transition_ms') or 300)
+    except (TypeError, ValueError):
+        ms = 300
+    return name, ms
+
+
 def _take(transition, ms):
     if not obs_ws.connected():
         return {'ok': False, 'error': 'OBS is not connected.'}
     scene = obs_ws.preview_scene()
     program = obs_ws.current_state().get('current_scene', '')
     if _armed['key'] is None and (not scene or scene == program):
-        return {'ok': False, 'error': 'Nothing armed.'}
+        return {'ok': False, 'error': 'Nothing armed — arm a shot first (click a tile or press its key), then Take or Auto.'}
     try:
         if transition:
             obs_ws.set_transition(transition, ms)
@@ -441,8 +555,28 @@ def _take(transition, ms):
     key = _armed['key'] or ''
     _armed['key'] = None
     obs._emit('cut', target=key, scene=scene, by='producer')
+    out = {'ok': True, 'scene': scene, 'transition': transition}
+    warning = _feature_after_take(key)
+    if warning:
+        out['warning'] = warning
     _emit_state()
-    return {'ok': True, 'scene': scene, 'transition': transition}
+    return out
+
+
+def _feature_after_take(key):
+    """A player (or DM) closeup taken here also features them in the party
+    scene — off-air, since program is now the closeup — so the Broadcast
+    page's turn state and the party layout stay in step with the stream.
+    Never fails the take: returns a warning text or ''."""
+    s = shot(key) if key else None
+    if not s or s['kind'] not in ('player', 'dm'):
+        return ''
+    try:
+        obs._sync_party_scene(featured_id=s['character_id'])
+        obs._set_featured(s['character_id'])
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return f"Cut done, but featuring {s['label']} in the party scene failed: {getattr(exc, 'comment', '') or exc}"
+    return ''
 
 
 def _ms(data, default=None):
@@ -455,10 +589,68 @@ def _ms(data, default=None):
 
 @router.post('/take')
 def api_take(data: dict = Depends(json_body), user=Depends(require_dm)):
-    """Preview -> Program with the transition named in the body (or whatever
-    OBS has selected when none is given)."""
-    name = (data.get('transition') or '').strip() or None
-    return _take(name, _ms(data))
+    """Preview -> Program with the transition named in the body, else the
+    Broadcast page's saved transition (else OBS's current one)."""
+    default_name, default_ms = _saved_transition()
+    name = (str(data.get('transition') or '')).strip() or default_name or None
+    return _take(name, _ms(data, default_ms))
+
+
+@router.post('/obs/connect')
+def api_obs_connect(user=Depends(require_dm)):
+    """Connect (or reconnect) to OBS from the console: switches OBS control
+    on when it is off — the same path as the Broadcast page's Enable — and
+    otherwise drops and redials with the saved host/port/password."""
+    if (appsettingGet('obs_enabled', '0') or '0') != '1':
+        out = obs.enable_obs()
+        _emit_state()
+        return out
+    obs_ws.restart()
+    _emit_state()
+    return {'ok': True, 'enabled': True, 'message': 'Reconnecting to OBS.'}
+
+
+@router.post('/spotlight')
+def api_spotlight(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """The Broadcast page's spotlight, from the console — but as a SETTING,
+    never a cut: {'key': 'char:N'|'dm'} re-lays-out the party scene with that
+    tile enlarged (the rest shrink), {'key': ''} evens the table out again.
+    Program is left alone: set it while a closeup or the map is up and the
+    party scene is already arranged when you cut back to it (the Broadcast
+    page's own buttons, by contrast, cut to the party scene as they go)."""
+    key = str(data.get('key', '') or '')
+    if key:
+        s = shot(key)
+        if not s or s['kind'] == 'special':
+            raise ApiError(400, f'Not a player shot: {key!r}', code='bad_shot')
+    if not obs_ws.connected():
+        return {'ok': False, 'error': 'OBS is not connected.'}
+    try:
+        if key:
+            obs._sync_party_scene(featured_id=s['character_id'])
+            obs._set_featured(s['character_id'])
+            obs._emit('feature', character_id=s['character_id'])
+        else:
+            obs._sync_party_scene(featured_id=None)
+            obs._set_featured(None)
+            obs._cancel_return()
+            obs._emit('group')
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return {'ok': False, 'error': _obs_error(exc)}
+    _emit_state()
+    return {'ok': True, 'featured': key or None, 'featured_id': s['character_id'] if key else None}
+
+
+@router.post('/build-closeups')
+def api_build_closeups(user=Depends(require_dm)):
+    """Build (or repair) the per-member closeup scenes the player shots arm."""
+    if not obs_ws.connected():
+        return {'ok': False, 'error': 'OBS is not connected.'}
+    try:
+        result = build_closeups()
+    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+        return {'ok': False, 'error': _obs_error(exc)}
+    return {'ok': True, **result}
 
 
 @router.post('/auto')

@@ -792,14 +792,22 @@ def ensure_nested_scene(parent_scene, child_scene, timeout=5):
         # OBS rejects this, but not before the request goes out; a scene that
         # contained itself would recurse forever.
         raise ObsRejected(600, 'a scene cannot contain itself')
+    return ensure_item(parent_scene, child_scene, timeout=timeout)
+
+
+def ensure_item(scene_name, source_name, timeout=5):
+    """Put an EXISTING source (input or scene) into a scene as an item, once,
+    and return its sceneItemId. One input may live in several scenes with
+    independent transforms — the producer console's closeup scenes reuse the
+    party scene's camera inputs this way, so no second feed is opened."""
     try:
-        item_id = scene_items(parent_scene, timeout=timeout).get(child_scene)
+        item_id = scene_items(scene_name, timeout=timeout).get(source_name)
     except ObsRejected:
         item_id = None
     if item_id is not None:
         return item_id
     return request('CreateSceneItem', {
-        'sceneName': parent_scene, 'sourceName': child_scene,
+        'sceneName': scene_name, 'sourceName': source_name,
         'sceneItemEnabled': True}, timeout=timeout).get('sceneItemId')
 
 

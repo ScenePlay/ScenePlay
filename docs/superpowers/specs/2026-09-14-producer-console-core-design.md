@@ -62,8 +62,8 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   Studio Mode). The Program tile shows who moved the shot — "producer", "broadcast page" or "automatic"
   (auto-cam, scene link, auto-return, group cuts) — from a `last_switch` tag `obs_ws.switch_scene`
   and the Take path record.
-- While at least one console is open, auto-cam is paused by default; a toggle on the console lets
-  it run. Pausing is a setting (`obs_auto_cam_paused_by_producer`) so the watcher thread reads it
+- Auto-cam keeps running while a console is open (changed 2026-09-15 at Eric's request; it was
+  paused by default at first); a toggle on the console pauses it. Pausing is a setting (`obs_auto_cam_paused_by_producer`) so the watcher thread reads it
   cheaply; the watcher clears it when the last console leaves.
 
 ## Multiview

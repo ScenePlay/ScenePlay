@@ -25,7 +25,7 @@ export async function mount(outlet, ctx) {
   const d = await api.get(`${P}/state`);
   if (my !== mountSeq) return;
   render(outlet, tpl(d));
-  const c = createConsole(ctx, outlet);
+  const c = createConsole(ctx, outlet, () => fetchAndPaint());   // fetchAndPaint is defined below; only called later
   c.paintState(d);
   c.wire();
   const opened = await api.post(`${P}/session`);
@@ -77,6 +77,10 @@ export async function mount(outlet, ctx) {
   ctx.every(3000, () => c.snapTiles());
   ctx.every(250, async () => { if (document.hidden) return; try { const l = await api.get(`${P}/levels`, { quiet: true }); c.paintLevels(l.levels || {}); } catch (e) {} });
   ctx.every(1000, () => c.tickClocks());
+  // Safety net: a slow state poll independent of SSE, so a stream that looks
+  // alive but delivers nothing (a buffering proxy, a stalled EventSource)
+  // can never leave the console showing a stale OBS/connection state.
+  ctx.every(5000, () => { if (!document.hidden) fetchAndPaint(); });
   ctx.every(15000, async () => {
     if (mine !== session) return;
     try {

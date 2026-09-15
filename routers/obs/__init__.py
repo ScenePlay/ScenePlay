@@ -1125,31 +1125,37 @@ def toggle(user=Depends(require_dm)):
     import integrations.obs_ws as obs_ws
     import integrations.relay_guard as relay_guard
     current = appsettingGet('obs_enabled', '0')
-    new_val = '0' if current == '1' else '1'
-    if new_val == '1' and not config.INTEGRATIONS:
+    if current != '1':
+        return enable_obs()
+    appsettingSet('obs_enabled', '0')
+    obs_ws.stop()
+    stop_feed_watch()
+    _cancel_return()
+    _emit('toggle', enabled=False)
+    return {'ok': True, 'enabled': False, 'message': 'OBS control disabled.'}
+
+
+def enable_obs():
+    """Switch OBS control on and start connecting — the Broadcast page's
+    Enable and the producer console's Connect share this one path."""
+    import integrations.obs_ws as obs_ws
+    import integrations.relay_guard as relay_guard
+    if not config.INTEGRATIONS:
         # SP_INTEGRATIONS=0: a dev copy never dials a real OBS. Say so instead
         # of flipping the switch and promising a connection that never comes
-        # (same contract as the relay toggle). Disabling below stays local.
+        # (same contract as the relay toggle).
         return {'ok': False, 'enabled': False, 'message': _NO_INTEGRATIONS}
-    appsettingSet('obs_enabled', new_val)
-
-    if new_val == '1':
-        # Same crash guard as the boot auto-start: if this enable takes the
-        # box down, the next start skips OBS instead of boot-looping.
-        appsettingSet('obs_boot_tripped', '')
-        relay_guard.arm(relay_guard.OBS_GUARD_PATH)
-        obs_ws.start(_appctx)
-        start_feed_watch(_appctx)
-        start_dice_watch(_appctx)
-        relay_guard.disarm_after_grace(relay_guard.OBS_GUARD_PATH)
-        message = 'OBS control enabled — connecting.'
-    else:
-        obs_ws.stop()
-        stop_feed_watch()
-        _cancel_return()
-        message = 'OBS control disabled.'
-    _emit('toggle', enabled=new_val == '1')
-    return {'ok': True, 'enabled': new_val == '1', 'message': message}
+    appsettingSet('obs_enabled', '1')
+    # Same crash guard as the boot auto-start: if this enable takes the
+    # box down, the next start skips OBS instead of boot-looping.
+    appsettingSet('obs_boot_tripped', '')
+    relay_guard.arm(relay_guard.OBS_GUARD_PATH)
+    obs_ws.start(_appctx)
+    start_feed_watch(_appctx)
+    start_dice_watch(_appctx)
+    relay_guard.disarm_after_grace(relay_guard.OBS_GUARD_PATH)
+    _emit('toggle', enabled=True)
+    return {'ok': True, 'enabled': True, 'message': 'OBS control enabled — connecting.'}
 
 
 @router.post('/save-config')
@@ -3078,6 +3084,14 @@ def api_build_party(user=Depends(require_dm)):
         snap = obs_ws.current_state()
         _build_audio(snap.get('base_width') or 1920,
                      snap.get('base_height') or 1080, result['warnings'])
+        # The producer console's player shots are per-member closeup scenes
+        # that reuse the tiles placed above; build them once the party is
+        # in place. Never fatal — the party build is the thing that matters.
+        try:
+            import routers.producer as producer
+            result['closeups'] = producer.build_closeups()['built']
+        except (obs_ws.ObsRejected, obs_ws.ObsUnavailable) as exc:
+            result['warnings'].append(f'Closeup scenes not built: {getattr(exc, "comment", "") or exc}')
         # Read back what OBS ACTUALLY holds, rather than what we believe we
         # sent. A source that silently fails to land is otherwise invisible
         # from here — the build reports success and the scene is missing a

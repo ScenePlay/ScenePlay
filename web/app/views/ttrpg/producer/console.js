@@ -8,7 +8,7 @@ import { token } from '../../../auth.js';
 const P = '/ttrpg/producer/api';
 const snapUrl = (target) => `${P}/snap/${encodeURIComponent(target)}?token=${encodeURIComponent(token() || '')}&_=${Date.now()}`;
 
-export function createConsole(ctx, root) {
+export function createConsole(ctx, root, onRefresh = null) {
   let state = null;          // last state document
   let scenes = [];           // ScenePlay scene tiles (/api/scenes + /api/v1/home)
   let sceneStates = {};      // scene_ID -> 'all'|'some'|'none' from the queue topic
@@ -24,7 +24,27 @@ export function createConsole(ctx, root) {
   function paintState(d) {
     state = d;
     stateAt = performance.now();
+    const upd = $('#pc-updated', root); if (upd) upd.textContent = 'updated ' + new Date().toLocaleTimeString() + (d.connected ? ' · OBS connected' : ' · OBS not connected');
     $('#pc-banner', root).hidden = d.connected;
+    // The OBS button is a status light first, a control second: green while
+    // connected (click = reconnect), red otherwise (click = connect).
+    const ob = $('#pc-obs-connect', root);
+    if (ob) {
+      const o = d.obs || {};
+      const busy = !d.connected && ['connecting', 'identifying', 'reconnecting'].includes(o.state);
+      ob.className = 'btn btn-sm text-nowrap ' + (d.connected ? 'btn-success' : busy ? 'btn-warning' : 'btn-danger');
+      ob.innerHTML = d.connected ? 'OBS &#10003; connected' : busy ? 'OBS &hellip; connecting' : (o.enabled ? 'OBS &#10007; reconnect' : 'OBS &#10007; connect');
+      ob.title = d.connected ? `Connected to OBS at ${o.target || ''} — click to reconnect` : busy ? `Connecting to OBS at ${o.target || ''}` : `Not connected — click to ${o.enabled ? 'reconnect' : 'switch OBS control on and connect'}`;
+    }
+    if (!d.connected) {
+      const o = d.obs || {};
+      const text = !o.enabled ? `OBS control is switched off — nothing reaches ${o.target || 'OBS'} until it is on.`
+        : o.state === 'connecting' || o.state === 'identifying' || o.state === 'reconnecting' ? `Connecting to OBS at ${o.target}…${o.error ? ' (last error: ' + o.error + ')' : ''}`
+        : o.state === 'auth_failed' ? `OBS at ${o.target} refused the password — fix it on the Broadcast page, then reconnect.`
+        : o.state === 'unsupported' ? `OBS at ${o.target} runs an obs-websocket this app cannot drive (needs v5).`
+        : `OBS is not connected (${o.state || 'unknown'})${o.error ? ': ' + o.error : ''}.`;
+      $('#pc-banner-text', root).textContent = text + ' Shots, Take and the OBS audio strip are disabled. Use the OBS button on the right to connect.';
+    }
     const by = d.last_switch ? ({ producer: 'producer', broadcast: 'broadcast page' }[d.last_switch.by] || 'automatic') : '';
     $('#pc-pgm-name', root).textContent = (d.program || '') + (by ? ' · by ' + by : '');
     $('#pc-pvw-name', root).textContent = d.preview || 'nothing armed';
@@ -38,7 +58,18 @@ export function createConsole(ctx, root) {
       b.classList.toggle('armed', !!s && s.scene === d.preview && s.scene !== d.program);
       b.classList.toggle('unbuilt', !!s && !s.built);
     }
-    for (const el of $$('#pc-take, #pc-auto, .pc-shot, #pc-mute-all', root)) el.disabled = !d.connected;
+    for (const b of $$('.pc-shot', root)) {
+      const s = d.shots.find(x => x.key === b.dataset.shot);
+      b.classList.toggle('featured', !!s && s.character_id != null && s.character_id === d.featured_id);
+    }
+    const g = $('#pc-group', root); if (g) g.disabled = !d.connected;
+    const scenesSig = JSON.stringify(d.scenes || []);
+    if (scenesSig !== lastScenesSig) { lastScenesSig = scenesSig; loadScenes(); }
+    const linksSig = JSON.stringify([d.scene_links, d.scene_links_live]);
+    if (linksSig !== JSON.stringify([sceneLinks, sceneLinksLive])) { sceneLinks = d.scene_links || {}; sceneLinksLive = !!d.scene_links_live; paintScenes(); }
+    const note = $('#pc-closeups-note', root);
+    if (note) note.hidden = !d.connected || !d.shots.some(s => s.kind !== 'special' && !s.built);
+    for (const el of $$('#pc-take, #pc-auto, .pc-shot, #pc-mute-all, #pc-mute-everyone, #pc-unmute-all, #pc-rebuild', root)) el.disabled = !d.connected;
     // The strip's meter key is each player's per-character cam scene, which
     // lives on state.shots (not on the OBS row, which only has the shared
     // party scene) — repaint the strip when that mapping actually changes.
@@ -52,6 +83,7 @@ export function createConsole(ctx, root) {
       html`<div>${m.at.slice(11)} ${m.timecode ? html`<code>${m.timecode.slice(0, 8)}</code>` : ''} ${m.note}${m.chapter ? ' ✓' : ''}</div>`)}`);
   }
 
+  let sceneLinks = {}, sceneLinksLive = false, lastScenesSig = null;
   function paintScenes() {
     const activeId = activeScene ? activeScene.id : null;
     const named = scenes.find(s => s.scene_ID === activeId);
@@ -66,7 +98,7 @@ export function createConsole(ctx, root) {
       const tip = [s.modelName, s.effectName].filter(Boolean).join(' \u00b7 ');
       return html`<button type="button" class="${cls}" data-scene="${s.scene_ID}"
         style="border-left-color:${s.color ? 'rgb(' + s.color + ')' : 'transparent'}" title="${tip}">
-        ${s.sceneName}</button>`; })}`);
+        ${s.sceneName}${sceneLinks[s.scene_ID] ? html`<span class="pc-link ${sceneLinksLive ? '' : 'off'}" title="${sceneLinksLive ? 'Activating this scene also cuts OBS to ' + sceneLinks[s.scene_ID] : 'Linked to ' + sceneLinks[s.scene_ID] + ' — scene link is switched off on the Broadcast page'}">&rarr; ${sceneLinks[s.scene_ID]}</span>` : ''}</button>`; })}`);
   }
 
   function paintStrip() {
@@ -158,10 +190,57 @@ export function createConsole(ctx, root) {
     inp.value = '';
     if (r.warning) toast.warn(r.warning); else toast.success(`Marker: ${r.marker.note}`);
   }
+  async function spotlight(key) {
+    const r = await api.post(`${P}/spotlight`, { key });
+    if (!r.ok) toast.warn(r.error);
+  }
+  async function buildCloseups() {
+    const btn = $('#pc-build-closeups', root); if (btn) btn.disabled = true;
+    try {
+      const r = await api.post(`${P}/build-closeups`);
+      if (!r.ok) toast.warn(r.error);
+      else toast.success(`Closeup scenes ready: ${r.built.length}` + (r.skipped.length ? ` (no tile yet: ${r.skipped.join(', ')})` : ''));
+    } finally { if (btn) btn.disabled = false; }
+  }
   async function muteAll() {
+    // "all" on the mute endpoint leaves the DM out; "all but DM" also means
+    // the DM must be HEARD, so a muted DM is unmuted in the same stroke.
     await api.post('/ttrpg/obs/api/mute', { all: true, muted: true });
-    toast.info('Players muted');
+    await api.post('/ttrpg/obs/api/mute', { character_id: -1, muted: false }, { quiet: true }).catch(() => {});
+    toast.info('Players muted, DM live');
     loadRows();
+  }
+  // "all" on the mute endpoint deliberately leaves the DM out; the DM is a
+  // separate call with their tile id (-1).
+  async function muteEveryone(muted) {
+    await api.post('/ttrpg/obs/api/mute', { all: true, muted });
+    await api.post('/ttrpg/obs/api/mute', { character_id: -1, muted }, { quiet: true }).catch(() => {});
+    toast.info(muted ? 'Everyone muted, DM included' : 'Everyone unmuted');
+    loadRows();
+  }
+  async function connectObs() {
+    const btn = $('#pc-obs-connect', root); if (btn) btn.disabled = true;
+    if (btn) { btn.className = 'btn btn-sm text-nowrap btn-warning'; btn.innerHTML = 'OBS &hellip; connecting'; }
+    try {
+      const r = await api.post(`${P}/obs/connect`, null, { quiet: true });
+      toast[r.ok ? 'info' : 'warn'](r.message || (r.ok ? 'Connecting…' : 'Could not connect'));
+      // Follow the handshake closely for a few seconds instead of waiting
+      // for the next event or the slow safety poll.
+      if (r.ok && onRefresh) for (let i = 1; i <= 8; i++) setTimeout(() => { if (!state || !state.connected) onRefresh(); }, i * 1000);
+    } catch (e) { toast.error(e.message || 'Could not connect'); }
+    finally { setTimeout(() => { if (btn) btn.disabled = false; }, 1500); }
+  }
+  async function rebuild() {
+    const btn = $('#pc-rebuild', root); if (btn) btn.disabled = true;
+    try {
+      const r = await api.post('/ttrpg/obs/api/build-party', null, { quiet: true });
+      if (!r.ok) toast.error(r.error || 'Build failed');
+      else {
+        const w = r.warnings || [];
+        toast[w.length ? 'warn' : 'success'](w.length ? `Rebuilt with ${w.length} warning${w.length === 1 ? '' : 's'}: ${w[0]}` : 'Scenes rebuilt');
+      }
+    } catch (e) { toast.error(e.message || 'Build failed'); }
+    finally { if (btn) btn.disabled = false; }
   }
   async function loadRows() {
     try {
@@ -176,34 +255,35 @@ export function createConsole(ctx, root) {
     } catch (e) { /* OBS state is optional here */ }
   }
   async function loadScenes() {
-    // /api/scenes has every scene with its full name and the active flag;
-    // /api/v1/home decorates the ones that have media or lights (colour, LED
-    // pattern, WLED effect, queue state) but truncates the name to 15 chars.
-    const [all, decorated] = await Promise.all([
-      api.get('/api/scenes?length=500', { quiet: true }).then(d => d.data || []).catch(() => []),
-      api.get('/api/v1/home', { quiet: true }).then(d => d.scenes || []).catch(() => []),
-    ]);
-    const deco = new Map(decorated.map(s => [s.scene_ID, s]));
-    const base = all.length ? all.filter(s => s.active) : decorated;
-    scenes = base
-      .slice()
-      .sort((a, b) => (a.orderBy || a.orderby || 0) - (b.orderBy || b.orderby || 0))
-      .map(s => ({ ...s, ...(deco.get(s.scene_ID) || {}), sceneName: s.sceneName }));
+    // The tiles are exactly the DM's session / battle-map list: the active
+    // session's campaign scenes, from the state document (state.scenes).
+    // /api/v1/home only decorates them (colour, LED pattern, WLED effect,
+    // queue state) when it happens to know the scene.
+    const home = await api.get('/api/v1/home', { quiet: true }).then(d => d.scenes || []).catch(() => []);
+    const deco = new Map(home.map(s => [s.scene_ID, s]));
+    scenes = ((state && state.scenes) || []).map(s => ({ ...(deco.get(s.scene_ID) || {}), ...s }));
     paintScenes();
   }
 
   // ── wiring ──
   function wire() {
     ctx.on(root, 'click', async (e) => {
+      const spot = e.target.closest('.pc-spot'); if (spot) { e.stopPropagation(); return spotlight(spot.dataset.spot); }
       const shot = e.target.closest('.pc-shot'); if (shot && !shot.disabled && !shot.classList.contains('unbuilt')) return arm(shot.dataset.shot);
       const sc = e.target.closest('[data-scene]'); if (sc) { await api.post(`/activatescenes/?id=${sc.dataset.scene}`); return; }
       const sp = e.target.closest('[data-sp]'); if (sp) { await api.post(sp.dataset.sp); return; }
       const mu = e.target.closest('[data-mute]'); if (mu) { await api.post('/ttrpg/obs/api/mute', { character_id: Number(mu.dataset.mute), muted: mu.dataset.muted !== '1' }); return loadRows(); }
       switch (e.target.closest('button, .pc-clock') && (e.target.closest('button, .pc-clock').id)) {
+        case 'pc-build-closeups': return buildCloseups();
+        case 'pc-group': return spotlight('');
         case 'pc-take': return take(false);
         case 'pc-auto': return take(true);
         case 'pc-marker': return marker();
         case 'pc-mute-all': return muteAll();
+        case 'pc-mute-everyone': return muteEveryone(true);
+        case 'pc-unmute-all': return muteEveryone(false);
+        case 'pc-rebuild': return rebuild();
+        case 'pc-obs-connect': return connectObs();
         case 'pc-count-start': return api.post(`${P}/countdown`, { seconds: 60 * (Number($('#pc-count-min', root).value) || 10) });
         case 'pc-count-clear': return api.post(`${P}/countdown`, { clear: true });
         case 'pc-clock': if (confirm('Reset the session clock?')) return api.post(`${P}/clock/reset`); return;
@@ -223,7 +303,20 @@ export function createConsole(ctx, root) {
       // OBS's preview alone (it is still what the next Take would put up).
       if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); return; }
       if (!state || !state.connected) return;   // same OBS-backed gate the mouse controls respect
-      if (/^[1-9]$/.test(e.key)) { const s = $$('.pc-shot', root)[Number(e.key) - 1]; if (s && !s.disabled && !s.classList.contains('unbuilt')) arm(s.dataset.shot); e.preventDefault(); }
+      // Shot hotkeys come from the state document (the Broadcast page's
+      // mapping: digits = tiles in party order, 0 party, B map, I intermission).
+      const hk = e.key.length === 1 ? e.key.toUpperCase() : '';
+      // Shift+digit spotlights that player inside the party scene (live);
+      // Shift+0 evens the table out. Digit codes are used because Shift
+      // changes e.key on many layouts (Shift+1 -> '!').
+      if (e.shiftKey && /^Digit[0-9]$/.test(e.code)) {
+        const digit = e.code.slice(5);
+        if (digit === '0') spotlight('');
+        else { const s = (state.shots || []).find(x => x.hotkey === digit); if (s && s.kind !== 'special') spotlight(s.key); }
+        e.preventDefault(); return;
+      }
+      const target = hk && /^[0-9BI]$/.test(hk) ? (state.shots || []).find(s => s.hotkey === hk) : null;
+      if (target) { const b = root.querySelector(`.pc-shot[data-shot="${target.key}"]`); if (b && !b.disabled && !b.classList.contains('unbuilt')) arm(target.key); e.preventDefault(); }
       else if (e.key === 'Enter') { take(false); e.preventDefault(); }
       else if (e.key === ' ') { take(true); e.preventDefault(); }
       else if (e.key === 'm' || e.key === 'M') { muteAll(); e.preventDefault(); }

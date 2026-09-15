@@ -390,7 +390,7 @@ Schedules table.
 **Producer console** (`/ttrpg/producer`, DM login): a second person on their own laptop can run the stream —
 arm a shot in Preview, Take or Auto it to Program (OBS Studio Mode), watch snapshot thumbnails of Program,
 Preview and every player, mute feeds, fire ScenePlay scenes, keep a session clock and break countdown, and drop
-chapter markers into the recording. Hotkeys: 1–9 arm, Enter take, Space auto, M mute all, K marker.
+chapter markers into the recording. Hotkeys mirror the Broadcast page: 1–9 arm the players in tile order, Shift+1–9 spotlight them inside the party scene (Shift+0 evens the table), 0 the party, B the map, I the intermission; Enter take, Space auto, M mute all, K marker.
 
 ---
 
