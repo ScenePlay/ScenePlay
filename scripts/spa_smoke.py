@@ -6,6 +6,10 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
+# NB: the default base is the LIVE appliance, and the default walk includes
+# /ttrpg/producer — which opens a real producer console session there (Studio
+# Mode on, auto-cam paused) and closes it on the way out, ten seconds after
+# which everything is put back. Point it at a scratch instance when in doubt.
 base = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:8086'
 user = sys.argv[2] if len(sys.argv) > 2 else 'dm'
 pw = sys.argv[3] if len(sys.argv) > 3 else 'x'
