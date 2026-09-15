@@ -17,10 +17,13 @@ export function createConsole(ctx, root) {
   let shotSig = '';          // signature of state.shots' (character_id, scene) pairs, to
                               // notice when the strip's per-row meter key needs recomputing
   const failures = { program: 0, preview: 0 };
+  const inflight = {};       // per snapshot target: a frame is still loading
+  let stateAt = 0;           // performance.now() when `state` was fetched
 
   // ── painting ──
   function paintState(d) {
     state = d;
+    stateAt = performance.now();
     $('#pc-banner', root).hidden = d.connected;
     const by = d.last_switch ? ({ producer: 'producer', broadcast: 'broadcast page' }[d.last_switch.by] || 'automatic') : '';
     $('#pc-pgm-name', root).textContent = (d.program || '') + (by ? ' · by ' + by : '');
@@ -93,27 +96,37 @@ export function createConsole(ctx, root) {
   }
 
   function tickClocks() {
+    // Both clocks are resolved server-side (the stored strings are the
+    // server's local time with no offset — a laptop in another timezone, or
+    // with a skewed clock, cannot parse them). All this does is add the time
+    // that has passed since the document arrived.
     if (!state) return;
+    const since = Math.max(0, (performance.now() - stateAt) / 1000);
     const clock = $('#pc-clock', root);
-    if (state.clock_start) {
-      const s = Math.max(0, (Date.now() - Date.parse(state.clock_start.replace(' ', 'T'))) / 1000);
-      clock.textContent = hms(s);
+    if (state.clock_elapsed_s !== null && state.clock_elapsed_s !== undefined) {
+      clock.textContent = hms(state.clock_elapsed_s + since);
     }
     const c = $('#pc-count', root);
-    if (state.countdown_until) {
-      const left = (Date.parse(state.countdown_until.replace(' ', 'T')) - Date.now()) / 1000;
-      c.textContent = (left < 0 ? '-' : '') + hms(Math.abs(left)).slice(3);
+    if (state.countdown_left_s !== null && state.countdown_left_s !== undefined) {
+      const left = state.countdown_left_s - since;
+      c.textContent = (left < 0 ? '-' : '') + countdown(Math.abs(left));
       c.className = 'pc-count' + (left < 0 ? ' over' : left < 60 ? ' warn' : '');
     } else { c.textContent = '--:--'; c.className = 'pc-count'; }
   }
   const hms = s => [3600, 60, 1].map((u, i) => String(Math.floor(s / u) % (i ? 60 : 100)).padStart(2, '0')).join(':');
+  // MM:SS for the usual break, H:MM:SS once an hour is on the clock
+  const countdown = s => (s >= 3600 ? hms(s).replace(/^0/, '') : hms(s).slice(3));
 
   // ── snapshots ──
   function refreshSnap(img, target) {
     if (!state || !state.connected || document.hidden) return;
+    // A slow OBS (or a big tile) must not queue frames behind itself: skip
+    // the tick while this target's last request is still loading.
+    if (inflight[target]) return;
+    inflight[target] = true;
     const next = new Image();
-    next.onload = () => { img.src = next.src; failures[target] = 0; };
-    next.onerror = () => { failures[target] = (failures[target] || 0) + 1; };
+    next.onload = () => { inflight[target] = false; img.src = next.src; failures[target] = 0; };
+    next.onerror = () => { inflight[target] = false; failures[target] = (failures[target] || 0) + 1; };
     next.src = snapUrl(target);
   }
   function snapMonitors() {
@@ -206,8 +219,8 @@ export function createConsole(ctx, root) {
       // Marker and Escape stay live even while OBS is disconnected: a marker
       // is just a stored row, and Escape's arm-nothing no-op needs no OBS call.
       if (e.key === 'k' || e.key === 'K') { marker(); e.preventDefault(); return; }
-      // Escape arms nothing: the server answers 400 bad_shot, and quiet:true
-      // keeps that expected rejection from toasting — the preview simply stays.
+      // Escape arms nothing: the server forgets the armed shot and leaves
+      // OBS's preview alone (it is still what the next Take would put up).
       if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); return; }
       if (!state || !state.connected) return;   // same OBS-backed gate the mouse controls respect
       if (/^[1-9]$/.test(e.key)) { const s = $$('.pc-shot', root)[Number(e.key) - 1]; if (s && !s.disabled && !s.classList.contains('unbuilt')) arm(s.dataset.shot); e.preventDefault(); }
