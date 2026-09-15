@@ -113,6 +113,31 @@ def _run_cmd(*args):
     return subprocess.run(args, capture_output=True, text=True, timeout=5)
 
 
+def _list_pactl_graph():
+    """Our modules as `pactl list modules short` shows them: a dict of part
+    ('sink' / 'loop' / 'remap') -> module id for whatever is loaded."""
+    out = _run_cmd("pactl", "list", "modules", "short")
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip() or "pactl unavailable")
+    found = {}
+    for line in out.stdout.splitlines():
+        if SINK_NAME not in line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        mid, name, args = parts[0], parts[1], parts[2]
+        if name == "module-null-sink" and f"sink_name={SINK_NAME}" in args:
+            found["sink"] = mid
+        elif name == "module-loopback" and f"source={SINK_NAME}.monitor" in args:
+            found["loop"] = mid
+        elif name == "module-remap-source" and f"source_name={SOURCE_NAME}" in args:
+            found["remap"] = mid
+        else:
+            found.setdefault("other", []).append(mid)
+    return found
+
+
 def _sweep_stale_pactl():
     """Unload sink/loopback modules left by a previous crash — a stale sink
     would otherwise shadow the fresh one and capture dead air."""
@@ -125,7 +150,28 @@ def _sweep_stale_pactl():
 
 
 def _ensure_graph_pactl():
+    """Build the graph, or adopt the one a previous run left. Returns True
+    when a NEW sink was created (OBS then has to re-bind to it).
+
+    Adopting matters more than it looks. A vdo.ninja push tab on this machine
+    captures the remapped source, and the moment that source is unloaded —
+    even for the few milliseconds a sweep-and-rebuild takes — the session
+    manager moves the browser's capture stream onto the default input, the
+    DM's real microphone, and leaves it there when the source comes back.
+    The tab keeps labelling the track "ScenePlay-Music", so nothing looks
+    wrong: the music feed simply carries the mic from then on. Every restart
+    of this player used to do exactly that. The modules are stateless (a
+    null sink, a loopback, a remap), so a complete set is as good as a fresh
+    one; only an incomplete set — a crash mid-build — is swept and rebuilt."""
     global _graph_modules
+    have = _list_pactl_graph()
+    if all(k in have for k in ("sink", "loop", "remap")) and "other" not in have:
+        _graph_modules = [have["sink"], have["loop"], have["remap"]]
+        _run_cmd("pactl", "set-sink-volume", SINK_NAME, "100%")
+        _run_cmd("pactl", "set-sink-mute", SINK_NAME, "0")
+        log.info("adopted the music capture graph left by the previous run "
+                 "(modules %s)", ",".join(_graph_modules))
+        return False
     _sweep_stale_pactl()
     sink = _run_cmd("pactl", "load-module", "module-null-sink",
                     f"sink_name={SINK_NAME}",
@@ -165,6 +211,7 @@ def _ensure_graph_pactl():
         log.info("music capture source not exposed (%s) — a browser on this "
                  "machine may not be able to select the music",
                  remap.stderr.strip()[:120])
+    return True
 
 
 def _ensure_graph_pipewire():
@@ -205,13 +252,15 @@ def _ensure_graph():
     import shutil
     try:
         if shutil.which("pactl"):
-            _ensure_graph_pactl()
+            created = _ensure_graph_pactl()
         elif shutil.which("pw-cli") and shutil.which("pw-loopback"):
             _ensure_graph_pipewire()
+            created = True
         else:
             raise RuntimeError("neither pactl nor pw-cli/pw-loopback found")
         _graph_ready = True
-        _stamp_sink_epoch()
+        if created:
+            _stamp_sink_epoch()
         return True
     except Exception as e:
         _graph_failed = True

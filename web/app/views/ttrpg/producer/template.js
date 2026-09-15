@@ -8,6 +8,10 @@ const shotTile = (s, i) => html`<button type="button" class="pc-shot ${s.built ?
   ${s.kind === 'special' ? '' : html`<span class="pc-spot" data-spot="${s.key}" title="Spotlight ${s.label} in the party scene — sets the layout, never cuts (Shift+${s.hotkey || 'click'})">&#9728;</span>`}
   <span class="pc-shot-label">${s.label}</span></button>`;
 
+// The battle map's AUTO / 2D / 3D button, same words: auto is the stream's
+// map source deciding for itself (3D while someone moves), 2D and 3D hold it.
+export const mapModeLabel = mode => (!mode || mode === 'auto') ? 'AUTO' : mode.toUpperCase();
+
 export function render(d) {
   return html`<div class="pc" id="pc">
   <div class="pc-banner mb-1" id="pc-banner" hidden><span id="pc-banner-text">OBS is not connected — shots, Take and the OBS audio strip are disabled.</span></div>
@@ -48,13 +52,10 @@ export function render(d) {
       title="Create one full-frame scene per player and the DM from the tiles already in the party scene (no new feeds)">&#127909; Build closeups</button>
       <span class="small text-secondary ms-2">Player shots need their closeup scenes in OBS.</span></div>
     <div class="d-flex flex-wrap align-items-center gap-2">
-      <button type="button" class="btn btn-danger pc-take" id="pc-take" title="Cut the armed Preview shot to Program (Enter)">TAKE &#9654;</button>
-      <button type="button" class="btn btn-outline-danger pc-take" id="pc-auto" title="Auto transition: fade the armed Preview shot to Program (Space). Arm a shot first — click a tile or press its key.">AUTO &#10227; <span class="small fw-normal">fade</span></button>
+      <button type="button" class="btn btn-danger pc-take" id="pc-take" title="Take the armed Preview shot to Program with the Broadcast page's transition (Enter)">TAKE &#9654; <span class="small fw-normal" id="pc-take-fade">${d.transition || 'Cut'}${d.transition_ms ? ' ' + d.transition_ms + 'ms' : ''}</span></button>
+      <button type="button" class="btn btn-outline-secondary pc-mapmode" id="pc-mapmode" data-mode="${d.map_mode || 'auto'}" title="Map on stream: auto (3D when someone moves), 2D, or 3D (V)">${mapModeLabel(d.map_mode)}</button>
       <button type="button" class="btn btn-outline-warning btn-sm" id="pc-group" title="Even the party out again — sets the layout, never cuts (Shift+0)">&#9728; Group</button>
-      <select class="form-select form-select-sm" id="pc-transition" style="width:auto">
-        ${d.transitions.map(t => html`<option value="${t}" ${t === d.transition ? 'selected' : ''}>${t}</option>`)}</select>
-      <input type="number" class="form-control form-control-sm" id="pc-ms" value="${d.transition_ms || 300}" min="0" max="5000" step="50" style="width:5.5rem" title="ms">
-      <span class="small text-secondary ms-auto">1–9 arm player &middot; Shift+1–9 spotlight in party (no cut) &middot; Shift+0 group &middot; 0 party &middot; B map &middot; I intermission &middot; Enter take &middot; Space auto &middot; M mute all &middot; K marker &middot; Esc clear</span>
+      <span class="small text-secondary ms-auto">1–9 arm player &middot; Shift+1–9 spotlight in party (no cut) &middot; Shift+0 group &middot; 0 party &middot; B map &middot; I intermission &middot; Enter take &middot; V map view &middot; M mute all &middot; K marker &middot; Esc clear</span>
     </div>
   </div>
 

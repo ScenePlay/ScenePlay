@@ -1,9 +1,10 @@
-// Producer console behaviour: arm / take / auto, snapshot polling, levels,
+// Producer console behaviour: arm / take / map view, snapshot polling, levels,
 // audio strip, ScenePlay tiles, clocks, markers, hotkeys.
 import { $, $$, html, render } from '../../../lib/dom.js';
 import { api } from '../../../api.js';
 import { toast } from '../../../ui/toast.js';
 import { token } from '../../../auth.js';
+import { mapModeLabel } from './template.js';
 
 const P = '/ttrpg/producer/api';
 const snapUrl = (target) => `${P}/snap/${encodeURIComponent(target)}?token=${encodeURIComponent(token() || '')}&_=${Date.now()}`;
@@ -52,6 +53,9 @@ export function createConsole(ctx, root, onRefresh = null) {
     $('#pc-rec-pill', root).className = 'badge ' + (d.recording ? 'bg-danger' : 'bg-secondary');
     $('#pc-consoles', root).textContent = `${d.consoles} console${d.consoles === 1 ? '' : 's'}`;
     $('#pc-autocam', root).checked = !d.auto_cam_paused;
+    // The Take button says what it will do: the fade is the Broadcast page's.
+    const fade = $('#pc-take-fade', root); if (fade) fade.textContent = (d.transition || 'Cut') + (d.transition_ms ? ' ' + d.transition_ms + 'ms' : '');
+    paintMapMode(d.map_mode);
     for (const b of $$('.pc-shot', root)) {
       const s = d.shots.find(x => x.key === b.dataset.shot);
       b.classList.toggle('live', !!s && s.scene === d.program);
@@ -69,7 +73,7 @@ export function createConsole(ctx, root, onRefresh = null) {
     if (linksSig !== JSON.stringify([sceneLinks, sceneLinksLive])) { sceneLinks = d.scene_links || {}; sceneLinksLive = !!d.scene_links_live; paintScenes(); }
     const note = $('#pc-closeups-note', root);
     if (note) note.hidden = !d.connected || !d.shots.some(s => s.kind !== 'special' && !s.built);
-    for (const el of $$('#pc-take, #pc-auto, .pc-shot, #pc-mute-all, #pc-mute-everyone, #pc-unmute-all, #pc-rebuild', root)) el.disabled = !d.connected;
+    for (const el of $$('#pc-take, .pc-shot, #pc-mute-all, #pc-mute-everyone, #pc-unmute-all, #pc-rebuild', root)) el.disabled = !d.connected;
     // The strip's meter key is each player's per-character cam scene, which
     // lives on state.shots (not on the OBS row, which only has the shared
     // party scene) — repaint the strip when that mapping actually changes.
@@ -178,11 +182,29 @@ export function createConsole(ctx, root, onRefresh = null) {
     if (!r.ok) toast.warn(r.error);
     else refreshSnap($('#pc-pvw-img', root), 'preview');
   }
-  async function take(auto) {
-    const body = auto ? { ms: Number($('#pc-ms', root).value) || 300 }
-                      : { transition: $('#pc-transition', root).value, ms: Number($('#pc-ms', root).value) || 0 };
-    const r = await api.post(`${P}/${auto ? 'auto' : 'take'}`, body);
+  // An empty body: the server applies the Broadcast page's transition and
+  // duration, the one place the fade is set.
+  async function take() {
+    const r = await api.post(`${P}/take`, {});
     if (!r.ok) toast.warn(r.error);
+  }
+  // The battle map's AUTO / 2D / 3D button: the server steps the mode, so it
+  // stays right even when the last change came from the map or the Broadcast
+  // page. A setting, not an OBS call, so it works while OBS is disconnected.
+  async function mapMode() {
+    const r = await api.post('/ttrpg/obs/api/map-mode', {});
+    if (!r.ok) toast.warn(r.error || 'Could not switch the map view.');
+    else paintMapMode(r.mode);
+  }
+  function paintMapMode(mode) {
+    const btn = $('#pc-mapmode', root); if (!btn || !mode) return;
+    btn.dataset.mode = mode;
+    btn.textContent = mapModeLabel(mode);
+    // Auto and 3D both light up, as on the map: in either the stream may be
+    // in a player's view, so a glance says "not just the flat map".
+    const live = mode === '3d' || mode === 'auto';
+    btn.classList.toggle('btn-outline-success', live);
+    btn.classList.toggle('btn-outline-secondary', !live);
   }
   async function marker() {
     const inp = $('#pc-marker-note', root);
@@ -276,8 +298,8 @@ export function createConsole(ctx, root, onRefresh = null) {
       switch (e.target.closest('button, .pc-clock') && (e.target.closest('button, .pc-clock').id)) {
         case 'pc-build-closeups': return buildCloseups();
         case 'pc-group': return spotlight('');
-        case 'pc-take': return take(false);
-        case 'pc-auto': return take(true);
+        case 'pc-take': return take();
+        case 'pc-mapmode': return mapMode();
         case 'pc-marker': return marker();
         case 'pc-mute-all': return muteAll();
         case 'pc-mute-everyone': return muteEveryone(true);
@@ -290,7 +312,6 @@ export function createConsole(ctx, root, onRefresh = null) {
       }
     });
     ctx.on($('#pc-autocam', root), 'change', e => api.post(`${P}/auto-cam-pause`, { paused: !e.target.checked }));
-    ctx.on($('#pc-transition', root), 'change', e => api.post(`${P}/transition`, { name: e.target.value, ms: Number($('#pc-ms', root).value) || 0 }));
     ctx.on($('#pc-vol', root), 'change', e => api.post('/set_volume', { volume: Number(e.target.value) }));
     ctx.on($('#pc-marker-note', root), 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); marker(); } });
     ctx.on(document, 'keydown', e => {
@@ -299,6 +320,7 @@ export function createConsole(ctx, root, onRefresh = null) {
       // Marker and Escape stay live even while OBS is disconnected: a marker
       // is just a stored row, and Escape's arm-nothing no-op needs no OBS call.
       if (e.key === 'k' || e.key === 'K') { marker(); e.preventDefault(); return; }
+      if (e.key === 'v' || e.key === 'V') { mapMode(); e.preventDefault(); return; }
       // Escape arms nothing: the server forgets the armed shot and leaves
       // OBS's preview alone (it is still what the next Take would put up).
       if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); return; }
@@ -317,8 +339,7 @@ export function createConsole(ctx, root, onRefresh = null) {
       }
       const target = hk && /^[0-9BI]$/.test(hk) ? (state.shots || []).find(s => s.hotkey === hk) : null;
       if (target) { const b = root.querySelector(`.pc-shot[data-shot="${target.key}"]`); if (b && !b.disabled && !b.classList.contains('unbuilt')) arm(target.key); e.preventDefault(); }
-      else if (e.key === 'Enter') { take(false); e.preventDefault(); }
-      else if (e.key === ' ') { take(true); e.preventDefault(); }
+      else if (e.key === 'Enter') { take(); e.preventDefault(); }
       else if (e.key === 'm' || e.key === 'M') { muteAll(); e.preventDefault(); }
     });
   }

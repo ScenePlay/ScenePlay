@@ -442,6 +442,10 @@ def state_doc():
         'stream_timecode': snap.get('stream_timecode', ''),
         'last_switch': snap.get('last_switch'),
         'auto_cam': obs.auto_cam_setting(),
+        # The console's AUTO / 2D / 3D button is the battle map's: same
+        # setting, same endpoint, painted from here so a change made on either
+        # page shows on both.
+        'map_mode': obs.map_mode(),
         'featured_id': obs.featured_id(),
         'obs': _obs_info(),
         'scene_links': _scene_links(),
@@ -589,8 +593,10 @@ def _ms(data, default=None):
 
 @router.post('/take')
 def api_take(data: dict = Depends(json_body), user=Depends(require_dm)):
-    """Preview -> Program with the transition named in the body, else the
-    Broadcast page's saved transition (else OBS's current one)."""
+    """Preview -> Program with the Broadcast page's saved transition and
+    duration (else OBS's current one). The console sends an empty body: the
+    fade is set once, on the Broadcast page, and every Take uses it. A body
+    may still name a transition and ms (remotes, scripts)."""
     default_name, default_ms = _saved_transition()
     name = (str(data.get('transition') or '')).strip() or default_name or None
     return _take(name, _ms(data, default_ms))
@@ -651,28 +657,6 @@ def api_build_closeups(user=Depends(require_dm)):
     except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
         return {'ok': False, 'error': _obs_error(exc)}
     return {'ok': True, **result}
-
-
-@router.post('/auto')
-def api_auto(data: dict = Depends(json_body), user=Depends(require_dm)):
-    """Preview -> Program with a fade (default 300 ms)."""
-    return _take('Fade', _ms(data, 300))
-
-
-@router.post('/transition')
-def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
-    """Pick the default transition for the next Take without taking."""
-    name = (data.get('name') or '').strip()
-    if not name:
-        raise ApiError(400, 'transition name required', code='bad_request')
-    ms = _ms(data)
-    if not obs_ws.connected():
-        return {'ok': False, 'error': 'OBS is not connected.'}
-    try:
-        obs_ws.set_transition(name, ms)
-    except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
-        return {'ok': False, 'error': _obs_error(exc)}
-    return {'ok': True, 'transition': name, 'ms': ms}
 
 
 # ── clocks and markers ───────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ sources), the rundown (cues arming shot + content + ScenePlay scene), and produc
 |---|---|
 | Who | A separate producer on a second laptop, LAN or remote, via the ScenePlay site. |
 | Access | Any DM login. No new role. |
-| Switching | Preview / Program with Take and Auto, via OBS Studio Mode. |
+| Switching | Preview / Program with Take, via OBS Studio Mode. Take uses the Broadcast page's transition and duration (changed 2026-09-15: the AUTO fade button and the console's own transition picker were removed; the map view AUTO / 2D / 3D toggle from the battle map sits there instead). |
 | Monitoring | Snapshot multiview from obs-websocket screenshots (no video feed). |
 | Live state to OBS | **State-driven**: one transparent browser overlay per scene, polling a state endpoint (like the panel and cards). No per-action OBS sources. The overlay itself ships with the *live content* phase; the core reserves the state shape and the nested-source Build step. |
 | Storage | Follow the panel-notes idiom (real tables + Alembic) when a table is needed. The core needs none: countdown and marker notes are `tblAppSettings` keys with the `:s<session_id>` suffix already used by OBS art. |
@@ -37,7 +37,7 @@ usable at 1024 px with the strip rows wrapping.
 │                           │                          │ countdown, ⚑   │
 ├───────────────────────────┴──────────────────────────┤ markers,       │
 │ SHOTS  [Party][Map][Carl][Donut][Mira]…[DM][Pre][Break][Post]  ← arm  │ (talkback slot)│
-│ [ TAKE ▶ ]   [ AUTO ⟳ 300ms ]   transition ▾                          │
+│ [ TAKE ▶ Fade 300ms ]   [ AUTO | 2D | 3D ]                            │
 ├──────────────────────────────────────┬────────────────────────────────┤
 │ SCENEPLAY  active: <scene> ▸         │ AUDIO  Carl ▮▮▮ M  Donut ▮▮ M  │
 │ [scene tiles, colour + LED swatch]   │ DM ▮▮▮▮ M  Music ▮▮ ⏭ ⏹ vol ─● │
@@ -54,9 +54,10 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
 
 - Opening the console enables OBS Studio Mode (`SetStudioModeEnabled true`); the server turns it
   off when the last console subscription ends (grace 10 s) and never leaves it on across a restart.
-- Arm = `SetCurrentPreviewScene`. Take = `TriggerStudioModeTransition` after setting the chosen
-  transition and duration (`SetCurrentSceneTransition`, `SetCurrentSceneTransitionDuration`).
-  Auto = Take with the fade transition. Take with nothing armed is a no-op with a toast.
+- Arm = `SetCurrentPreviewScene`. Take = `TriggerStudioModeTransition` after setting the Broadcast
+  page's saved transition and duration (`SetCurrentSceneTransition`, `SetCurrentSceneTransitionDuration`).
+  Take with nothing armed is a no-op with a toast. The map view button posts an empty body to the
+  Broadcast page's `/ttrpg/obs/api/map-mode`, which steps auto → 2D → 3D and releases a pinned character.
 - Existing direct switches keep working unchanged: auto-cam, scene-linked cuts, Broadcast page
   cuts, `switch_scene` callers. They change Program directly (`SetCurrentProgramScene` is legal in
   Studio Mode). The Program tile shows who moved the shot — "producer", "broadcast page" or "automatic"
@@ -97,15 +98,15 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   chapter name; always append `{at, note, recording}` to `producer_markers:s<id>` (JSON list,
   capped at 200) so the list survives when OBS is not recording.
 - **Hotkeys** (client only, ignored while an input has focus): `1`–`9` arm shots in tile order,
-  `Enter` Take, `Space` Auto, `M` mute all but DM, `K` marker, `Esc` clears the armed shot.
+  `Enter` Take, `V` map view, `M` mute all but DM, `K` marker, `Esc` clears the armed shot.
 
 ## Backend
 
 - `routers/producer.py`, prefix `/ttrpg/producer/api`, `require_dm` on every route; registered
   in `app.py` after the OBS router. Endpoints: `session` (POST open / ping / DELETE close),
   `state` (GET: studio mode, program, preview, shots with scene names, transitions, recording /
-  streaming, auto-cam paused, countdown, markers, console count), `arm`, `take`, `auto`,
-  `transition`, `auto-cam-pause`, `countdown`, `marker`, `markers` (GET).
+  streaming, auto-cam paused, map mode, countdown, markers, console count), `arm`, `take`,
+  `auto-cam-pause`, `countdown`, `marker`, `markers` (GET).
 - `integrations/obs_ws.py` gains `studio_mode(enabled)`, `preview_scene()/set_preview_scene()`,
   `trigger_transition()`, `set_transition(name, ms)`, `record_chapter(name)`, `screenshot(source,
   width, fmt, quality)` (wrapping the existing raw call used by the dark-camera probe), and an

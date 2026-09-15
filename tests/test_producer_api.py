@@ -434,15 +434,14 @@ def test_take_uses_chosen_transition_and_tags_the_cut(dm_client, obs, fresh, mon
     assert dm_client.get('/ttrpg/producer/api/state').get_json()['armed'] is None
 
 
-def test_auto_is_a_fade_take(dm_client, obs, fresh, monkeypatch):
-    import routers.obs as ro
+def test_auto_is_gone(dm_client, obs, fresh, monkeypatch):
+    """The AUTO button was replaced by the map view toggle; a Take carries the
+    Broadcast page's fade settings itself, so a second fade-only route would
+    just be a Take that ignored them."""
     _party(monkeypatch)
-    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'warnings': []})
-    monkeypatch.setattr(ro, '_set_featured', lambda cid: None)
-    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'dm'})
-    r = dm_client.post('/ttrpg/producer/api/auto', json={'ms': 500})
-    assert r.get_json() == {'ok': True, 'scene': 'DM - Jankis', 'transition': 'Fade'}
-    assert ('transition', 'Fade', 500) in obs['calls']
+    # 405, not 404: the SPA catch-all owns GET on unknown paths, so a POST to
+    # a route that is gone is refused by method.
+    assert dm_client.post('/ttrpg/producer/api/auto', json={'ms': 500}).status_code in (404, 405)
 
 
 def test_take_obs_rejection_is_reported(dm_client, obs, fresh, monkeypatch):
@@ -457,11 +456,12 @@ def test_take_obs_rejection_is_reported(dm_client, obs, fresh, monkeypatch):
     assert body['ok'] is False and 'studio mode is off' in body['error']
 
 
-def test_transition_default(dm_client, obs, fresh, monkeypatch):
+def test_transition_picker_is_gone(dm_client, obs, fresh, monkeypatch):
+    """The console has no transition dropdown of its own any more: the fade is
+    set once, on the Broadcast page, and every Take uses it."""
     _party(monkeypatch)
     r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 700})
-    assert r.get_json() == {'ok': True, 'transition': 'Fade', 'ms': 700}
-    assert ('transition', 'Fade', 700) in obs['calls']
+    assert r.status_code in (404, 405)
 
 
 def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
@@ -510,13 +510,6 @@ def test_take_of_a_preview_armed_inside_obs(dm_client, obs, fresh, monkeypatch):
     obs['state']['preview_scene'] = 'Player - Carl'
     body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
     assert body['ok'] is True and body['scene'] == 'Player - Carl'
-
-
-def test_transition_when_disconnected(dm_client, obs, fresh, monkeypatch):
-    obs['flags']['connected'] = False
-    body = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 300}).get_json()
-    assert body == {'ok': False, 'error': 'OBS is not connected.'}
-    assert not any(c[0] == 'transition' for c in obs['calls'])
 
 
 def test_countdown_seconds_until_and_clear(dm_client, obs, fresh, monkeypatch):
@@ -818,6 +811,19 @@ def test_state_defaults_to_the_broadcast_page_transition(dm_client, obs, fresh, 
     appsettingSet('obs_transition_ms', '700')
     d = dm_client.get('/ttrpg/producer/api/state').get_json()
     assert d['transition'] == 'Fade' and d['transition_ms'] == 700
+
+
+def test_state_carries_the_map_mode(dm_client, obs, fresh, monkeypatch):
+    """The console's AUTO / 2D / 3D button is the battle map's, so it paints
+    from the same setting and follows a change made from either page."""
+    from sql import appsettingSet
+    _party(monkeypatch)
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['map_mode'] == 'auto'
+    appsettingSet('obs_map_mode', '2d')
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['map_mode'] == '2d'
+    r = dm_client.post('/ttrpg/obs/api/map-mode', json={})          # the button's own call
+    assert r.get_json()['mode'] == '3d'
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['map_mode'] == '3d'
 
 
 def test_take_without_a_transition_uses_the_saved_default(dm_client, obs, fresh, monkeypatch):
