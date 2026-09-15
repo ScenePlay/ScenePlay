@@ -179,12 +179,12 @@ export function createConsole(ctx, root) {
     // /api/scenes has every scene with its full name and the active flag;
     // /api/v1/home decorates the ones that have media or lights (colour, LED
     // pattern, WLED effect, queue state) but truncates the name to 15 chars.
-    const [rows, decorated] = await Promise.all([
+    const [all, decorated] = await Promise.all([
       api.get('/api/scenes?length=500', { quiet: true }).then(d => d.data || []).catch(() => []),
       api.get('/api/v1/home', { quiet: true }).then(d => d.scenes || []).catch(() => []),
     ]);
     const deco = new Map(decorated.map(s => [s.scene_ID, s]));
-    const base = rows.length ? rows.filter(s => s.active) : decorated;
+    const base = all.length ? all.filter(s => s.active) : decorated;
     scenes = base
       .slice()
       .sort((a, b) => (a.orderBy || a.orderby || 0) - (b.orderBy || b.orderby || 0))
