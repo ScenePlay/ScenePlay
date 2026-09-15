@@ -129,3 +129,39 @@ def test_input_volume_meters_event_fills_levels(ws, monkeypatch):
     lv, at = ow.levels()
     assert lv == {'Player - Carl Cam': [0.5, 0.4], 'ScenePlay Music': [0.9], 'silent': []}
     assert at > 0
+
+
+def test_connected_hooks_are_registered_once_and_isolated(ws, monkeypatch):
+    """One hook that raises must not stop the others (they run on the session's
+    reconnect path, where an exception would take the socket down)."""
+    monkeypatch.setattr(ow, '_connected_hooks', [])
+    ran = []
+
+    def boom():
+        raise RuntimeError('hook exploded')
+
+    ow.add_connected_hook(boom)
+    ow.add_connected_hook(lambda: ran.append('ok'))
+    ow.add_connected_hook(boom)                     # idempotent per function
+    assert len(ow._connected_hooks) == 2
+    ow._run_connected_hooks()                       # must not raise
+    assert ran == ['ok']
+
+
+def test_malformed_meter_frame_leaves_levels_alone(ws, monkeypatch):
+    """20 frames a second arrive on the reader thread: a junk one may cost its
+    own levels, never the session."""
+    monkeypatch.setattr(ow, '_levels', {})
+    ow._handle_event('InputVolumeMeters', {'inputs': [
+        {'inputName': 'ScenePlay Music', 'inputLevelsMul': [[0.2, 0.9, 0.9]]}]})
+    good, _at = ow.levels()
+    assert good == {'ScenePlay Music': [0.9]}
+    ow._handle_event('InputVolumeMeters', {'inputs': [
+        {'inputName': 'Bad', 'inputLevelsMul': [['x', 'y']]}]})
+    assert ow.levels()[0] == good, 'unparsable peaks: keep the last good frame'
+    ow._handle_event('InputVolumeMeters', {'inputs': 'nonsense'})
+    assert ow.levels()[0] == good
+    # A short channel entry is not junk — it reads as silence, as before.
+    ow._handle_event('InputVolumeMeters', {'inputs': [
+        {'inputName': 'Quiet', 'inputLevelsMul': [['x']]}]})
+    assert ow.levels()[0] == {'Quiet': [0.0]}

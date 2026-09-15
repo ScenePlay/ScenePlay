@@ -175,6 +175,44 @@ def current_state():
     return snap
 
 
+# ── connect hooks ────────────────────────────────────────────────────────────
+#
+# Things that have to be re-asserted on OBS every time the socket comes back
+# (the producer console's Studio Mode / meter stream: OBS forgets them when it
+# restarts, and nothing else would notice). Registered at import time by the
+# module that owns the state; obs_ws never imports its callers.
+
+_connected_hooks = []
+
+
+def add_connected_hook(fn):
+    """Run fn() after every successful connect, once the cache is primed and
+    the state is 'connected'. Idempotent per function."""
+    if fn not in _connected_hooks:
+        _connected_hooks.append(fn)
+
+
+def _run_connected_hooks():
+    """Each hook isolated: one that raises must not touch the others or the
+    session. Runs on its OWN thread, never the reader thread — a hook issues
+    request()s, and the reader thread is the only one that can deliver their
+    replies (see the module docstring)."""
+    for fn in list(_connected_hooks):
+        try:
+            fn()
+        except Exception as exc:
+            log.info('OBS connected hook %s failed: %s',
+                     getattr(fn, '__name__', fn), exc)
+
+
+def _fire_connected_hooks():
+    if not _connected_hooks:
+        return
+    t = threading.Thread(target=_run_connected_hooks, name='obs-connected-hooks')
+    t.daemon = True
+    t.start()
+
+
 def request(request_type, data=None, timeout=3):
     """Send one request and wait for its correlated reply.
 
@@ -1103,6 +1141,7 @@ def _session_loop(ws, cfg):
     _set_state('connected')
     _clear_error()
     log.info('OBS connected (obs-websocket %s)', hello.get('obsWebSocketVersion', '?'))
+    _fire_connected_hooks()
 
     while not _stop.is_set() and not _restart_requested:
         try:
@@ -1288,11 +1327,16 @@ def _handle_event(event_type, data):
         with _cache_lock:
             _cache['studio_mode'] = bool(data.get('studioModeEnabled'))
     elif event_type == 'InputVolumeMeters':
-        peaks = {}
-        for inp in data.get('inputs') or []:
-            chans = inp.get('inputLevelsMul') or []
-            peaks[inp.get('inputName', '')] = [
-                float(c[1]) if len(c) > 1 else 0.0 for c in chans]
+        # 20 frames a second on the reader thread: one malformed frame must
+        # cost the levels of that frame, never the session.
+        try:
+            peaks = {}
+            for inp in data.get('inputs') or []:
+                chans = inp.get('inputLevelsMul') or []
+                peaks[inp.get('inputName', '')] = [
+                    float(c[1]) if len(c) > 1 else 0.0 for c in chans]
+        except Exception:
+            return
         with _levels_lock:
             _levels.clear()
             _levels.update(peaks)

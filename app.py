@@ -98,6 +98,14 @@ async def lifespan(app: FastAPI):
     hub = events.EventHub()
     await hub.start()
     app.state.hub = hub
+    if not getattr(app.state, 'testing', False):
+        # No producer console survives the process: drop the auto-cam pause a
+        # console owned before the restart, before anything reads it.
+        try:
+            import routers.producer as producer
+            producer.reset_after_restart()
+        except Exception as exc:
+            log.info('producer console reset skipped: %s', exc)
     if config.INTEGRATIONS and not getattr(app.state, 'testing', False):
         import core.boot as boot
         boot.start_integrations()
@@ -147,8 +155,6 @@ def create_app(testing=False):
     app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(events_router.router)
-    import routers.producer as producer
-    app.include_router(producer.router)
     _include_optional(app, 'routers.scenes')
     _include_optional(app, 'routers.utilities')
     _include_optional(app, 'routers.tables')
@@ -161,6 +167,7 @@ def create_app(testing=False):
     _include_optional(app, 'routers.handouts')
     _include_optional(app, 'routers.relay_admin')
     _include_optional(app, 'routers.obs')
+    _include_optional(app, 'routers.producer')
 
     @app.get('/api/v1/health')
     async def health():
