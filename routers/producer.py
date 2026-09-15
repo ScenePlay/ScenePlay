@@ -32,6 +32,10 @@ SWEEP_S = 15                 # self-re-arming reap interval while any console is
 PAUSE_KEY = 'obs_auto_cam_paused_by_producer'
 SPECIALS_FRONT = ('party', 'map')
 SPECIALS_BACK = ('pre', 'intermission', 'post')
+CLOCK_STALE_S = 6 * 3600     # a session clock older than this is last night's
+SHOTS_TTL_S = 2.0            # shots() hits the DB; the console asks constantly
+STATE_MARKERS = 30           # the state document carries the tail; GET /markers has them all
+_TS = '%Y-%m-%d %H:%M:%S'
 
 _consoles = {}               # console_id -> last ping (time.monotonic())
 _lock = threading.Lock()     # guards _consoles, _off_timer, _sweep_timer and _sweep_gen
@@ -184,10 +188,41 @@ def open_console():
     if first:
         appsettingSet(PAUSE_KEY, '1')
         _studio(True)
-    if not (appsettingGet('producer_clock_start' + _sfx(), '') or '').strip():
+    # The session clock belongs to THIS sitting: keep a start that a console
+    # opened earlier tonight, replace one left over from a previous session
+    # (nothing else ever clears it).
+    started = appsettingGet('producer_clock_start' + _sfx(), '') or ''
+    age = _secs_since(started)
+    if age is None or age > CLOCK_STALE_S:
         appsettingSet('producer_clock_start' + _sfx(), _now())
     _emit_state()
     return cid
+
+
+def reset_after_restart():
+    """Boot: no console survives the process, so neither may the auto-cam
+    pause this module owns. Without this a crash (or a plain restart) while a
+    console was open would leave auto-cam switched off for good, with no
+    console left to un-pause it."""
+    with _lock:
+        _consoles.clear()
+    _armed['key'] = None
+    appsettingSet(PAUSE_KEY, '0')
+
+
+def _on_obs_connected():
+    """OBS came back (its own restart, or ours): it has forgotten Studio Mode
+    and the meter subscription. Re-assert whichever way the console registry
+    says it should be — including turning Studio Mode back OFF when the
+    console that asked for it is long gone. Runs on obs_ws's hook thread."""
+    if console_count() > 0:
+        obs_ws.set_studio_mode(True)
+        obs_ws.set_meter_events(True)
+    elif obs_ws.current_state().get('studio_mode'):
+        obs_ws.set_studio_mode(False)
+
+
+obs_ws.add_connected_hook(_on_obs_connected)
 
 
 def ping_console(cid):
@@ -209,10 +244,29 @@ def close_console(cid):
 
 # ── shots ────────────────────────────────────────────────────────────────────
 
+_shots_cache = {'at': 0.0, 'key': None, 'value': []}
+
+
 def shots():
     """Every shot the console can arm, in tile order: party, map, the players
-    and the DM (the number keys count these), then the show cards."""
-    built = set(obs_ws.current_state().get('scenes') or [])
+    and the DM (the number keys count these), then the show cards.
+
+    Cached for SHOTS_TTL_S, keyed by OBS's scene list: every console polls
+    state (and each snapshot resolves a target) several times a second, and
+    the party query behind this is the only DB work on that path. A scene
+    built or renamed in OBS changes the key and busts the cache at once; a
+    party edit shows up within the TTL."""
+    built = tuple(obs_ws.current_state().get('scenes') or [])
+    now = time.monotonic()
+    cached = _shots_cache
+    if cached['key'] == built and (now - cached['at']) < SHOTS_TTL_S:
+        return [dict(s) for s in cached['value']]
+    out = _build_shots(set(built))
+    _shots_cache.update(at=now, key=built, value=out)
+    return [dict(s) for s in out]
+
+
+def _build_shots(built):
     out = []
 
     def special(key):
@@ -245,9 +299,10 @@ def shot(key):
 
 def _markers():
     try:
-        return json.loads(appsettingGet('producer_markers' + _sfx(), '') or '[]')
+        rows = json.loads(appsettingGet('producer_markers' + _sfx(), '') or '[]')
     except ValueError:
         return []
+    return rows if isinstance(rows, list) else []
 
 
 def _session_info():
@@ -258,9 +313,24 @@ def _session_info():
     return {'id': sess.session_id, 'title': sess.title, 'number': sess.session_number}
 
 
+def _secs_since(text):
+    """Whole seconds since a stored local timestamp, or None when it is unset
+    or unparsable. Both clocks are computed HERE: the stored strings are local
+    time with no offset, so a browser in another timezone (or with a skewed
+    clock) cannot parse them correctly on its own."""
+    try:
+        return int((datetime.now() - datetime.strptime((text or '').strip(), _TS)).total_seconds())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def state_doc():
     snap = obs_ws.current_state()
     sfx = _sfx()
+    countdown_until = appsettingGet('producer_countdown_until' + sfx, '') or ''
+    clock_start = appsettingGet('producer_clock_start' + sfx, '') or ''
+    elapsed = _secs_since(clock_start)
+    left = _secs_since(countdown_until)
     return {
         'connected': obs_ws.connected(),
         'studio_mode': bool(snap.get('studio_mode')),
@@ -278,9 +348,13 @@ def state_doc():
         'last_switch': snap.get('last_switch'),
         'auto_cam': obs.auto_cam_setting(),
         'auto_cam_paused': (appsettingGet(PAUSE_KEY, '0') or '0') == '1',
-        'countdown_until': appsettingGet('producer_countdown_until' + sfx, '') or '',
-        'clock_start': appsettingGet('producer_clock_start' + sfx, '') or '',
-        'markers': _markers(),
+        'countdown_until': countdown_until,
+        'clock_start': clock_start,
+        # ...and the same two clocks already resolved to seconds, so the
+        # console only has to add the time since it fetched this document.
+        'clock_elapsed_s': None if elapsed is None else max(0, elapsed),
+        'countdown_left_s': None if left is None else -left,
+        'markers': _markers()[-STATE_MARKERS:],
         'consoles': console_count(),
         'session': _session_info(),
     }
@@ -328,6 +402,13 @@ def _obs_error(exc):
 @router.post('/arm')
 def api_arm(data: dict = Depends(json_body), user=Depends(require_dm)):
     key = str(data.get('key', '') or '')
+    if not key:
+        # Escape on the console: forget what was armed WITHOUT touching OBS's
+        # preview — the operator is clearing their own intent, not the shot
+        # the next Take would put on air.
+        _armed['key'] = None
+        _emit_state()
+        return {'ok': True, 'armed': None}
     s = shot(key)
     if not s:
         raise ApiError(400, f'Unknown shot {key!r}', code='bad_shot')
@@ -405,7 +486,6 @@ def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
 # ── clocks and markers ───────────────────────────────────────────────────────
 
 MARKERS_MAX = 200
-_TS = '%Y-%m-%d %H:%M:%S'
 
 
 @router.post('/countdown')

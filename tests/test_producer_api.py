@@ -57,6 +57,7 @@ def fresh(monkeypatch):
     monkeypatch.setattr(p, '_off_timer', None)
     monkeypatch.setattr(p, '_sweep_timer', None)
     monkeypatch.setattr(p, '_armed', {'key': None})
+    monkeypatch.setattr(p, '_shots_cache', {'at': 0.0, 'key': None, 'value': []})
     yield p
     if p._off_timer is not None:          # a real Timer scheduled by a test: never let it fire later
         p._off_timer.cancel()
@@ -89,6 +90,47 @@ def test_open_turns_studio_mode_on_and_pauses_auto_cam(dm_client, obs, fresh, mo
     assert ('studio', True) in obs['calls'] and ('meters', True) in obs['calls']
     assert appsettingGet(fresh.PAUSE_KEY, '0') == '1'
     assert fresh.producer_active() is True
+
+
+def test_reset_after_restart_clears_pause(dm_client, obs, fresh, monkeypatch):
+    """A restart leaves no console behind, so it may not leave the auto-cam
+    pause behind either."""
+    from sql import appsettingGet
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/session')
+    fresh._armed['key'] = 'map'
+    assert appsettingGet(fresh.PAUSE_KEY, '0') == '1'
+    fresh.reset_after_restart()
+    assert appsettingGet(fresh.PAUSE_KEY, '0') == '0'
+    assert fresh._consoles == {} and fresh._armed['key'] is None
+
+
+def test_connected_hook_is_registered_at_import(fresh):
+    import integrations.obs_ws as obs_ws
+    assert fresh._on_obs_connected in obs_ws._connected_hooks
+
+
+def test_connected_hook_reenables_studio_mode_while_console_open(dm_client, obs, fresh, monkeypatch):
+    """OBS restarted under a live console: it forgot Studio Mode and the meter
+    subscription, and only this hook puts them back."""
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/session')
+    obs['calls'].clear()
+    fresh._on_obs_connected()
+    assert ('studio', True) in obs['calls'] and ('meters', True) in obs['calls']
+
+
+def test_connected_hook_turns_studio_mode_off_when_no_console(obs, fresh):
+    """Reconnecting to an OBS still in Studio Mode with every console gone
+    (the grace timer died with the old process): put it back."""
+    obs['state']['studio_mode'] = True
+    fresh._on_obs_connected()
+    assert ('studio', False) in obs['calls']
+    assert not any(c[0] == 'meters' for c in obs['calls'])
+    obs['calls'].clear()
+    obs['state']['studio_mode'] = False
+    fresh._on_obs_connected()
+    assert obs['calls'] == [], 'nothing to reconcile: no console, no Studio Mode'
 
 
 def test_auto_cam_is_off_while_producer_pauses_it(dm_client, obs, fresh, monkeypatch):
@@ -246,6 +288,83 @@ def test_state_document(dm_client, obs, fresh, monkeypatch):
     assert d['consoles'] == 0 and d['armed'] is None and d['auto_cam_paused'] is False
     assert set(d) >= {'studio_mode', 'recording', 'streaming', 'record_timecode', 'stream_timecode',
                       'last_switch', 'countdown_until', 'clock_start', 'markers', 'session'}
+    assert d['clock_elapsed_s'] is None and d['countdown_left_s'] is None
+
+
+def test_state_resolves_both_clocks_server_side(dm_client, obs, fresh, monkeypatch):
+    """The stored strings are local time with no offset — a console in another
+    timezone could never work them out itself."""
+    from datetime import datetime, timedelta
+    from sql import appsettingSet
+    _party(monkeypatch)
+    appsettingSet('producer_clock_start', (datetime.now() - timedelta(minutes=5)).strftime(fresh._TS))
+    appsettingSet('producer_countdown_until', (datetime.now() + timedelta(seconds=90)).strftime(fresh._TS))
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert 299 <= d['clock_elapsed_s'] <= 302
+    assert 88 <= d['countdown_left_s'] <= 91
+    assert len(d['clock_start']) == 19 and len(d['countdown_until']) == 19
+    appsettingSet('producer_countdown_until', (datetime.now() - timedelta(seconds=30)).strftime(fresh._TS))
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['countdown_left_s'] < 0
+
+
+def test_state_carries_only_the_marker_tail(dm_client, obs, fresh):
+    """Every console refetches this document on every producer/obs event; the
+    full list stays one call away at GET /markers."""
+    rows = [{'at': '2026-01-01 00:00:00', 'timecode': '', 'note': str(i),
+             'recording': False, 'chapter': False} for i in range(50)]
+    fresh._save_markers(rows)
+    ms = dm_client.get('/ttrpg/producer/api/state').get_json()['markers']
+    assert len(ms) == fresh.STATE_MARKERS and ms[-1]['note'] == '49'
+    assert len(dm_client.get('/ttrpg/producer/api/markers').get_json()['markers']) == 50
+
+
+def test_markers_ignore_a_non_list_value(dm_client, obs, fresh):
+    from sql import appsettingSet
+    appsettingSet('producer_markers', '{"note": "not a list"}')
+    assert dm_client.get('/ttrpg/producer/api/markers').get_json() == {'markers': []}
+    assert dm_client.post('/ttrpg/producer/api/marker', json={'note': 'first'}).get_json()['ok']
+    assert [m['note'] for m in dm_client.get('/ttrpg/producer/api/markers').get_json()['markers']] == ['first']
+
+
+def test_shots_cached_for_ttl(obs, fresh, monkeypatch):
+    """shots() is on the state and snapshot paths, which a console hits several
+    times a second — the party query behind it must not run every time."""
+    import routers.obs as ro
+    chars = _party(monkeypatch)
+    queries = []
+    monkeypatch.setattr(ro, '_ordered_party',
+                        lambda include_offstage=False: (queries.append(1), chars)[1])
+    clock = {'t': 1000.0}
+    monkeypatch.setattr(fresh.time, 'monotonic', lambda: clock['t'])
+    first = fresh.shots()
+    assert len(queries) == 1
+    assert fresh.shots() == first and len(queries) == 1        # inside the TTL
+    clock['t'] += fresh.SHOTS_TTL_S + 0.1
+    assert fresh.shots() == first and len(queries) == 2        # TTL elapsed
+    obs['state']['scenes'] = list(obs['state']['scenes']) + ['ScenePlay Pre']
+    fresh.shots()
+    assert len(queries) == 3, 'a scene built in OBS busts the cache at once'
+    fresh.shots()[0]['label'] = 'mutated'
+    assert fresh.shots()[0]['label'] != 'mutated', 'callers get copies'
+
+
+def test_clock_start_renewed_when_stale(dm_client, obs, fresh, monkeypatch):
+    """The session clock is this sitting's; a start left over from last week
+    would open the console showing a six-day session."""
+    from datetime import datetime, timedelta
+    from sql import appsettingGet, appsettingSet
+    _party(monkeypatch)
+    recent = (datetime.now() - timedelta(minutes=30)).strftime(fresh._TS)
+    appsettingSet('producer_clock_start', recent)
+    dm_client.post('/ttrpg/producer/api/session')
+    assert appsettingGet('producer_clock_start', '') == recent, 'same sitting: keep it'
+    stale = (datetime.now() - timedelta(seconds=fresh.CLOCK_STALE_S + 60)).strftime(fresh._TS)
+    appsettingSet('producer_clock_start', stale)
+    dm_client.post('/ttrpg/producer/api/session')
+    assert appsettingGet('producer_clock_start', '') != stale
+    appsettingSet('producer_clock_start', 'not a timestamp')
+    dm_client.post('/ttrpg/producer/api/session')
+    assert len(appsettingGet('producer_clock_start', '')) == 19
 
 
 def test_state_needs_dm(legacy_app, obs, fresh):
@@ -272,6 +391,18 @@ def test_arm_unknown_and_unbuilt(dm_client, obs, fresh, monkeypatch):
     body = r.get_json()
     assert body['ok'] is False and 'Build' in body['error']
     assert not any(c[0] == 'preview' for c in obs['calls'])
+
+
+def test_arm_empty_key_clears_armed(dm_client, obs, fresh, monkeypatch):
+    """Escape on the console: forget the armed shot, leave OBS's preview where
+    it is (that is still what the next Take would put on air)."""
+    _party(monkeypatch)
+    dm_client.post('/ttrpg/producer/api/arm', json={'key': 'map'})
+    obs['calls'].clear()
+    r = dm_client.post('/ttrpg/producer/api/arm', json={'key': ''})
+    assert r.status_code == 200 and r.get_json() == {'ok': True, 'armed': None}
+    assert not any(c[0] == 'preview' for c in obs['calls'])
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['armed'] is None
 
 
 def test_arm_when_disconnected(dm_client, obs, fresh, monkeypatch):
@@ -427,7 +558,13 @@ def test_marker_chapter_rejection_is_not_fatal(dm_client, obs, fresh, monkeypatc
 
 
 def test_markers_capped_and_clearable(dm_client, obs, fresh):
-    for i in range(205):
+    # The first 200 go straight into the store: stamping them through the API
+    # would fan 200 `producer` events into the session-wide hub (and starve
+    # every other subscriber, tests/test_events.py included). Five go the real
+    # way, which is what pushes the list over the cap.
+    fresh._save_markers([{'at': '2026-01-01 00:00:00', 'timecode': '', 'note': str(i),
+                          'recording': False, 'chapter': False} for i in range(200)])
+    for i in range(200, 205):
         dm_client.post('/ttrpg/producer/api/marker', json={'note': str(i)})
     ms = dm_client.get('/ttrpg/producer/api/markers').get_json()['markers']
     assert len(ms) == 200 and ms[0]['note'] == '5' and ms[-1]['note'] == '204'
