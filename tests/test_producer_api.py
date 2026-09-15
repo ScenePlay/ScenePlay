@@ -460,7 +460,8 @@ def test_transition_default(dm_client, obs, fresh, monkeypatch):
 
 
 def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
-    """The OBS router's own cut tells switch_scene who did it."""
+    """Every cut the Broadcast page makes tells switch_scene who did it, so the
+    console's Program tile can say "by broadcast page" instead of "automatic"."""
     import integrations.obs_ws as obs_ws
     import routers.obs as ro
     seen = []
@@ -470,6 +471,18 @@ def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
     monkeypatch.setattr(ro, '_special_scene', lambda special: '')
     r = dm_client.post('/ttrpg/obs/api/cut/map')
     assert r.status_code == 200 and seen == [('ScenePlay Map', 'broadcast')]
+
+    seen.clear()                                   # the manual scene buttons
+    monkeypatch.setattr(ro, '_after_switch', lambda scene: None)
+    r = dm_client.post('/ttrpg/obs/api/switch', json={'scene': 'ScenePlay Map'})
+    assert r.status_code == 200 and seen == [('ScenePlay Map', 'broadcast')]
+
+    seen.clear()                                   # featuring a player
+    monkeypatch.setattr(ro, 'party_scene_name', lambda: 'ScenePlay Party')
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'warnings': []})
+    monkeypatch.setattr(obs_ws, 'current_state', lambda: {'current_scene': 'ScenePlay Map'})
+    _payload, err = ro._do_feature(1)
+    assert err is None and seen == [('ScenePlay Party', 'broadcast')]
 
 
 def test_second_take_without_rearming_is_refused(dm_client, obs, fresh, monkeypatch):

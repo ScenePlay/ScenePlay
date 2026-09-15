@@ -93,6 +93,24 @@ class TestScanVotes:
         ro._scan_cameras()
         assert not ro._auto_dark_ids and not ro._cam_dark_votes
 
+    def test_a_producer_pause_keeps_the_votes(self, app, rig, ro, settings):
+        """Opening a producer console pauses auto-cam (that is the default) —
+        it must not un-swap every dark camera on the way in. Only the DM's own
+        switch forgets what the watch has seen."""
+        _kara, probe = rig
+        probe['dark'] = True
+        ro._scan_cameras()
+        ro._scan_cameras()
+        assert 7 in ro._auto_dark_ids
+        settings['obs_auto_cam_paused_by_producer'] = '1'
+        assert ro.auto_cam_on() is False and ro.auto_cam_setting() is True
+        ro._scan_cameras()
+        assert 7 in ro._auto_dark_ids, 'a paused watch keeps what it knows'
+        assert ro._cam_dark_votes
+        settings['obs_auto_cam'] = '0'                  # now the DM switched it off
+        ro._scan_cameras()
+        assert not ro._auto_dark_ids and not ro._cam_dark_votes
+
 
 class TestTileDecision:
     def test_dark_feed_shows_the_card(self, app, rig, ro, monkeypatch):

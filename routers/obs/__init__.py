@@ -3,8 +3,10 @@ data, the go-live API, the token-gated overlay pages OBS's browser sources
 load, and the player camera self-service page.
 
 Click a party member (here or on the battle map sidebar) and OBS cuts its
-PROGRAM scene to that player's camera. Studio mode is deliberately not used:
-this table cuts straight to program.
+PROGRAM scene to that player's camera: this table cuts straight to program.
+Studio mode belongs to the producer console (routers/producer.py), which turns
+it on while a console is open and previews shots there — a direct program cut
+stays legal either way.
 
 Everything talks to obs_ws, which holds a persistent socket — so a call here
 either answers immediately or fails fast on an in-memory `connected()` check.
@@ -492,9 +494,14 @@ def _scan_cameras():
     casts no vote and keeps its current state."""
     import integrations.obs_ws as obs_ws
     if not (auto_cam_on() and obs_ws.connected()):
-        if _auto_dark_ids or _cam_dark_votes:
-            _auto_dark_ids.clear()
-            _cam_dark_votes.clear()
+        # Forget the votes only when the DM switched the feature off (or OBS
+        # went away). A producer console's pause is temporary and every
+        # console starts paused: clearing here would flip every stat card
+        # back to a camera that is still dark the moment a console opens.
+        if not auto_cam_setting() or not obs_ws.connected():
+            if _auto_dark_ids or _cam_dark_votes:
+                _auto_dark_ids.clear()
+                _cam_dark_votes.clear()
         return
     for char in _ordered_party():
         if not char.video_view_url():
@@ -936,7 +943,7 @@ def _unfeature():
     _sync_party_scene(featured_id=None)
     group = _special_scene('group')
     if group and obs_ws.current_state().get('current_scene') != group:
-        obs_ws.switch_scene(group)
+        obs_ws.switch_scene(group, by='broadcast')
     _set_featured(None)
     # "Everyone on screen" means letting go of BOTH holds on one character:
     # the enlarged tile and the map pinned to their eyes. Releasing only the
@@ -1717,7 +1724,7 @@ def _do_switch(scene):
     except (TypeError, ValueError):
         ms = 300
     try:
-        obs_ws.switch_scene(scene, transition=transition, duration_ms=ms)
+        obs_ws.switch_scene(scene, transition=transition, duration_ms=ms, by='broadcast')
     except obs_ws.ObsRejected as exc:
         # 600 ResourceNotFound: the scene was renamed or deleted in OBS.
         if exc.code == 600:
@@ -1743,7 +1750,7 @@ def _do_feature(character_id):
     try:
         result = _sync_party_scene(featured_id=character_id)
         if obs_ws.current_state().get('current_scene') != scene:
-            obs_ws.switch_scene(scene)
+            obs_ws.switch_scene(scene, by='broadcast')
     except obs_ws.ObsRejected as exc:
         obs_ws._record_error('feature', exc)
         return None, (JSONResponse({'ok': False,
@@ -1899,7 +1906,7 @@ def api_view_player(data: dict = Depends(json_body), user=Depends(require_dm)):
             known, _cur = obs_ws.scene_list()
             if scene not in (known or []):
                 scene, _warn = ensure_map_scene()
-            obs_ws.switch_scene(scene)
+            obs_ws.switch_scene(scene, by='broadcast')
         except obs_ws.ObsRejected as exc:
             obs_ws._record_error('view-player', exc)
             scene = None
