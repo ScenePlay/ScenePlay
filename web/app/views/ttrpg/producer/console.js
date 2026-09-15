@@ -13,6 +13,8 @@ export function createConsole(ctx, root) {
   let scenes = [];           // ScenePlay scenes
   let sceneStates = {};      // scene_ID -> queued/active flags from the queue topic
   let rows = [];             // OBS audio rows (from /ttrpg/obs/api/state)
+  let shotSig = '';          // signature of state.shots' (character_id, scene) pairs, to
+                              // notice when the strip's per-row meter key needs recomputing
   const failures = { program: 0, preview: 0 };
 
   // ── painting ──
@@ -33,6 +35,11 @@ export function createConsole(ctx, root) {
       b.classList.toggle('unbuilt', !!s && !s.built);
     }
     for (const el of $$('#pc-take, #pc-auto, .pc-shot, #pc-mute-all', root)) el.disabled = !d.connected;
+    // The strip's meter key is each player's per-character cam scene, which
+    // lives on state.shots (not on the OBS row, which only has the shared
+    // party scene) — repaint the strip when that mapping actually changes.
+    const sig = JSON.stringify(d.shots.map(s => [s.character_id, s.scene]));
+    if (sig !== shotSig) { shotSig = sig; if (rows.length) paintStrip(); }
     paintMarkers(d.markers || []);
   }
 
@@ -50,10 +57,16 @@ export function createConsole(ctx, root) {
   }
 
   function paintStrip() {
-    render($('#pc-strip', root), html`${rows.map(r => html`
+    // The OBS row only knows the shared party scene; the per-character cam
+    // source (what obs_ws.levels() is actually keyed by) lives on this
+    // console's own state.shots, keyed by character_id.
+    render($('#pc-strip', root), html`${rows.map(r => {
+      const shot = state && (state.shots || []).find(s => s.character_id === r.character_id);
+      const source = shot ? shot.scene + ' Cam' : '';
+      return html`
       <div class="d-flex align-items-center gap-2"><span style="width:7rem" class="text-truncate">${r.name}</span>
-        <div class="pc-meter flex-grow-1" data-level="${r.source}"><span></span></div></div>
-      <button type="button" class="btn btn-sm ${r.muted ? 'btn-danger' : 'btn-outline-secondary'}" data-mute="${r.character_id}" data-muted="${r.muted ? 1 : 0}">${r.muted ? 'Unmute' : 'M'}</button>`)}
+        <div class="pc-meter flex-grow-1" data-level="${source}"><span></span></div></div>
+      <button type="button" class="btn btn-sm ${r.muted ? 'btn-danger' : 'btn-outline-secondary'}" data-mute="${r.character_id}" data-muted="${r.muted ? 1 : 0}">${r.muted ? 'Unmute' : 'M'}</button>`; })}
       <div class="d-flex align-items-center gap-2"><span style="width:7rem">Music</span>
         <div class="pc-meter flex-grow-1" data-level="ScenePlay Music"><span></span></div></div><span></span>`);
   }
@@ -128,8 +141,11 @@ export function createConsole(ctx, root) {
   async function loadRows() {
     try {
       const d = await api.get('/ttrpg/obs/api/state', { quiet: true });
+      // source (the meter key) is resolved in paintStrip() from state.shots,
+      // not from this row's r.scene — that's the shared party scene, not the
+      // per-character cam OBS actually meters.
       rows = (d.rows || []).filter(r => r.on_stream).map(r => ({
-        name: r.name, source: r.scene + ' Cam', character_id: r.character_id, muted: !!r.muted,
+        name: r.name, character_id: r.character_id, muted: !!r.muted,
       }));
       paintStrip();
     } catch (e) { /* OBS state is optional here */ }
@@ -162,14 +178,17 @@ export function createConsole(ctx, root) {
     ctx.on(document, 'keydown', e => {
       const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (/^[1-9]$/.test(e.key)) { const s = $$('.pc-shot', root)[Number(e.key) - 1]; if (s && !s.classList.contains('unbuilt')) arm(s.dataset.shot); e.preventDefault(); }
+      // Marker and Escape stay live even while OBS is disconnected: a marker
+      // is just a stored row, and Escape's arm-nothing no-op needs no OBS call.
+      if (e.key === 'k' || e.key === 'K') { marker(); e.preventDefault(); return; }
+      // Escape arms nothing: the server answers 400 bad_shot, and quiet:true
+      // keeps that expected rejection from toasting — the preview simply stays.
+      if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); return; }
+      if (!state || !state.connected) return;   // same OBS-backed gate the mouse controls respect
+      if (/^[1-9]$/.test(e.key)) { const s = $$('.pc-shot', root)[Number(e.key) - 1]; if (s && !s.disabled && !s.classList.contains('unbuilt')) arm(s.dataset.shot); e.preventDefault(); }
       else if (e.key === 'Enter') { take(false); e.preventDefault(); }
       else if (e.key === ' ') { take(true); e.preventDefault(); }
       else if (e.key === 'm' || e.key === 'M') { muteAll(); e.preventDefault(); }
-      else if (e.key === 'k' || e.key === 'K') { marker(); e.preventDefault(); }
-      // Escape arms nothing: the server answers 400 bad_shot, and quiet:true
-      // keeps that expected rejection from toasting — the preview simply stays.
-      else if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); }
     });
   }
 
