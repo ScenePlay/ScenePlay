@@ -386,6 +386,12 @@ thumbnails and durations.
 Schedule scene activations by time (e.g. lights on at dusk) via the Cron
 Schedules table.
 
+### Producer console
+**Producer console** (`/ttrpg/producer`, DM login): a second person on their own laptop can run the stream —
+arm a shot in Preview, Take or Auto it to Program (OBS Studio Mode), watch snapshot thumbnails of Program,
+Preview and every player, mute feeds, fire ScenePlay scenes, keep a session clock and break countdown, and drop
+chapter markers into the recording. Hotkeys: 1–9 arm, Enter take, Space auto, M mute all, K marker.
+
 ---
 
 ## Browser extensions (the fast way to import)

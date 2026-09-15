@@ -74,3 +74,4 @@ Status: done = ported and browser-verified on a real DB copy; dropped = unrefere
 | videoMedia_table.html | views/media/tables/* | done |
 | videoScene_table.html | views/media/tables/* | done |
 | wledPattern_table.html | views/media/tables/* | done |
+| — (new in 2.1) | web/app/views/ttrpg/producer/ (/ttrpg/producer) | done |
