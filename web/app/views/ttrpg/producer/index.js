@@ -4,7 +4,6 @@ import { render } from '../../../lib/dom.js';
 import { loadCss } from '../../../lib/loader.js';
 import { api } from '../../../api.js';
 import { sse } from '../../../sse.js';
-import { store } from '../../../store.js';
 import { render as tpl } from './template.js';
 import { createConsole } from './console.js';
 
@@ -27,13 +26,19 @@ export async function mount(outlet, ctx) {
   let player = { volume: 0 };
   try { player = await api.get('/api/v1/player', { quiet: true }); } catch (e) {}
   c.setVolume(player.volume);
+  if (player.nowplaying) c.setNowPlaying(player.nowplaying);
 
   const refresh = async () => { try { c.paintState(await api.get(`${P}/state`, { quiet: true })); } catch (e) {} };
   offs.push(sse.subscribe('producer', refresh, { fallback: { every: 5000, fetch: refresh } }));
   offs.push(sse.subscribe('obs', refresh));
   offs.push(sse.subscribe('queue', q => c.setSceneStates(q && q.scene_states),
     { fallback: { every: 5000, fetch: () => api.get('/api/scenes/queue-states', { quiet: true }).then(r => ({ scene_states: r.states })) } }));
-  offs.push(store.subscribe('nowPlaying', np => c.setNowPlaying(np), { immediate: true }));
+  // `nowplaying` carries the track AND the active ScenePlay scene. The media
+  // layout's player bar (which fills store.nowPlaying) is not on this page.
+  offs.push(sse.subscribe('nowplaying', np => c.setNowPlaying(np),
+    { fallback: { every: 5000, fetch: () => api.get('/api/nowplaying', { quiet: true }) } }));
+  // a scene activation changes colours, queue state and which tile is live
+  offs.push(sse.subscribe('scene', () => c.loadScenes()));
 
   await Promise.all([c.loadScenes(), c.loadRows()]);
   ctx.every(500, () => c.snapMonitors());

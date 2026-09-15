@@ -50,8 +50,9 @@ export function render(d) {
   </div>
 
   <div class="pc-sp ttrpg-card p-2">
-    <div class="d-flex justify-content-between align-items-center mb-1"><b>ScenePlay</b>
-      <span class="small text-secondary" id="pc-nowplaying"></span></div>
+    <div class="d-flex justify-content-between align-items-center mb-1 gap-2"><b>ScenePlay</b>
+      <span class="small text-truncate" id="pc-active-scene">no scene active</span>
+      <span class="small text-secondary text-truncate ms-auto" id="pc-nowplaying"></span></div>
     <div class="d-flex flex-wrap gap-1 mb-2" id="pc-scenes"></div>
     <div class="d-flex gap-1">
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/nextsong">Skip &#9197;</button>

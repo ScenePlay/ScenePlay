@@ -1,6 +1,6 @@
 // Producer console behaviour: arm / take / auto, snapshot polling, levels,
 // audio strip, ScenePlay tiles, clocks, markers, hotkeys.
-import { $, $$, html, render, esc } from '../../../lib/dom.js';
+import { $, $$, html, render } from '../../../lib/dom.js';
 import { api } from '../../../api.js';
 import { toast } from '../../../ui/toast.js';
 import { token } from '../../../auth.js';
@@ -10,8 +10,9 @@ const snapUrl = (target) => `${P}/snap/${encodeURIComponent(target)}?token=${enc
 
 export function createConsole(ctx, root) {
   let state = null;          // last state document
-  let scenes = [];           // ScenePlay scenes
-  let sceneStates = {};      // scene_ID -> queued/active flags from the queue topic
+  let scenes = [];           // ScenePlay scene tiles (/api/scenes + /api/v1/home)
+  let sceneStates = {};      // scene_ID -> 'all'|'some'|'none' from the queue topic
+  let activeScene = null;    // {id, name} of the scene ScenePlay is playing
   let rows = [];             // OBS audio rows (from /ttrpg/obs/api/state)
   let shotSig = '';          // signature of state.shots' (character_id, scene) pairs, to
                               // notice when the strip's per-row meter key needs recomputing
@@ -49,10 +50,19 @@ export function createConsole(ctx, root) {
   }
 
   function paintScenes() {
+    const activeId = activeScene ? activeScene.id : null;
+    const named = scenes.find(s => s.scene_ID === activeId);
+    $('#pc-active-scene', root).textContent =
+      activeScene ? 'active: ' + (named ? named.sceneName : activeScene.name) : 'no scene active';
     render($('#pc-scenes', root), html`${scenes.map(s => {
-      const st = sceneStates[s.scene_ID] || {};
-      return html`<button type="button" class="btn btn-sm btn-outline-secondary pc-scene ${st.active ? 'active' : ''}"
-        data-scene="${s.scene_ID}" style="border-left-color:${esc(s.color || 'transparent')}" title="${s.modelName || ''} ${s.effectName || ''}">
+      // queue topic first (live), then whatever /api/v1/home said at load.
+      const q = sceneStates[s.scene_ID] !== undefined ? sceneStates[s.scene_ID] : (s.queued || '');
+      const cls = 'btn btn-sm btn-outline-secondary pc-scene'
+        + (s.scene_ID === activeId ? ' active' : '')
+        + (q === 'all' || q === 'some' ? ' queued' : '');
+      const tip = [s.modelName, s.effectName].filter(Boolean).join(' \u00b7 ');
+      return html`<button type="button" class="${cls}" data-scene="${s.scene_ID}"
+        style="border-left-color:${s.color ? 'rgb(' + s.color + ')' : 'transparent'}" title="${tip}">
         ${s.sceneName}</button>`; })}`);
   }
 
@@ -68,12 +78,14 @@ export function createConsole(ctx, root) {
         <div class="pc-meter flex-grow-1" data-level="${source}"><span></span></div></div>
       <button type="button" class="btn btn-sm ${r.muted ? 'btn-danger' : 'btn-outline-secondary'}" data-mute="${r.character_id}" data-muted="${r.muted ? 1 : 0}">${r.muted ? 'Unmute' : 'M'}</button>`; })}
       <div class="d-flex align-items-center gap-2"><span style="width:7rem">Music</span>
-        <div class="pc-meter flex-grow-1" data-level="ScenePlay Music"><span></span></div></div><span></span>`);
+        <div class="pc-meter flex-grow-1" data-level="ScenePlay Music|ScenePlay Music Feed"><span></span></div></div><span></span>`);
   }
 
   function paintLevels(lv) {
     for (const m of $$('[data-level]', root)) {
-      const peaks = lv[m.dataset.level] || [];
+      // one meter may watch several OBS inputs (the music bed is captured
+      // under either name depending on how the scene was built) — loudest wins
+      const peaks = m.dataset.level.split('|').flatMap(k => lv[k] || []);
       const peak = peaks.length ? Math.max(...peaks) : 0;
       const db = peak > 0 ? 20 * Math.log10(peak) : -60;          // multiplier -> dBFS
       m.firstElementChild.style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + '%';
@@ -151,7 +163,20 @@ export function createConsole(ctx, root) {
     } catch (e) { /* OBS state is optional here */ }
   }
   async function loadScenes() {
-    try { const d = await api.get('/api/scenes?length=500', { quiet: true }); scenes = d.data || []; paintScenes(); } catch (e) { scenes = []; }
+    // /api/scenes has every scene with its full name and the active flag;
+    // /api/v1/home decorates the ones that have media or lights (colour, LED
+    // pattern, WLED effect, queue state) but truncates the name to 15 chars.
+    const [rows, decorated] = await Promise.all([
+      api.get('/api/scenes?length=500', { quiet: true }).then(d => d.data || []).catch(() => []),
+      api.get('/api/v1/home', { quiet: true }).then(d => d.scenes || []).catch(() => []),
+    ]);
+    const deco = new Map(decorated.map(s => [s.scene_ID, s]));
+    const base = rows.length ? rows.filter(s => s.active) : decorated;
+    scenes = base
+      .slice()
+      .sort((a, b) => (a.orderBy || a.orderby || 0) - (b.orderBy || b.orderby || 0))
+      .map(s => ({ ...s, ...(deco.get(s.scene_ID) || {}), sceneName: s.sceneName }));
+    paintScenes();
   }
 
   // ── wiring ──
@@ -195,7 +220,13 @@ export function createConsole(ctx, root) {
   return {
     paintState, paintScenes, paintStrip, paintLevels, tickClocks, snapMonitors, snapTiles, loadRows, loadScenes, wire,
     setSceneStates(s) { sceneStates = s || {}; paintScenes(); },
-    setNowPlaying(np) { $('#pc-nowplaying', root).textContent = np && np.song ? `♪ ${np.song.name}` : ''; },
+    setNowPlaying(np) {
+      // /api/nowplaying (and its SSE topic) carries the active scene as well
+      // as the track — that is the only place the console can learn it.
+      $('#pc-nowplaying', root).textContent = np && np.song ? `♪ ${np.song.name}` : '';
+      activeScene = (np && np.scene) || null;
+      paintScenes();
+    },
     setVolume(v) { if (v != null) $('#pc-vol', root).value = v; },
   };
 }

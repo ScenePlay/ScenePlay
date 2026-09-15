@@ -32,6 +32,7 @@ body.producer .container, body.producer .container-fluid { max-width: none; }
 .pc-strip { display: grid; grid-template-columns: 1fr auto; gap: .25rem .5rem; align-items: center; font-size: .85rem; }
 .pc-scene { width: 8.5rem; text-align: left; border-left: .4rem solid transparent; }
 .pc-scene.active { outline: 2px solid var(--ttrpg-accent, #c9a227); }
+.pc-scene.queued { box-shadow: inset 0 -.2rem 0 var(--ttrpg-accent, #c9a227); }
 .pc-clock { font-variant-numeric: tabular-nums; font-size: 1.25rem; }
 .pc-count.warn { color: #c9a227; } .pc-count.over { color: #c0392b; }
 .pc-banner { background: #c0392b; color: #fff; padding: .35rem .6rem; border-radius: 4px; }
