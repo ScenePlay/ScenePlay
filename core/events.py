@@ -44,8 +44,31 @@ def ensure_table(db_path=None):
         conn.close()
 
 
+_listeners = []      # in-process fn(topic, payload) callbacks (relay_producer)
+
+
+def add_listener(fn):
+    """Call fn(topic, payload) synchronously on every emit() in THIS process.
+    For modules that must react to a topic without tailing tblEvents (the
+    remote producer push). Listeners must be quick and must not raise."""
+    if fn not in _listeners:
+        _listeners.append(fn)
+
+
+def remove_listener(fn):
+    try:
+        _listeners.remove(fn)
+    except ValueError:
+        pass
+
+
 def emit(topic, payload=None):
     """Best-effort: never raises, never blocks a request or a worker."""
+    for fn in list(_listeners):
+        try:
+            fn(topic, payload)
+        except Exception:
+            pass
     try:
         conn = sqlite3.connect(config.DB_PATH, timeout=15)
         try:

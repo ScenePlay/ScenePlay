@@ -24,7 +24,7 @@ def settings(app, monkeypatch):
 
 class TestCutTargets:
     def test_the_expected_targets_exist(self):
-        assert set(CUT_TARGETS) == {'map', 'pre', 'intermission', 'post', 'party'}
+        assert set(CUT_TARGETS) == {'map', 'pre', 'intermission', 'post', 'party', 'black'}
 
     def test_every_target_resolves_to_a_scene_name(self, app, settings):
         for key in CUT_TARGETS:

@@ -268,3 +268,59 @@ class TestEase:
         assert obs_ws._ease(0.1) < 0.1
         assert obs_ws._ease(0.9) > 0.9
         assert obs_ws._ease(0.5) == pytest.approx(0.5)
+
+
+class TestKeepRunning:
+    """A reflow never resizes a running browser source (2026-09-19): the resize
+    recreates the page, and every tile got one whenever the member count
+    crossed a grid boundary — the choppy, blanking barge-in."""
+
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        from routers import obs as obs_routes
+        seen = []
+        settings = {}
+
+        def fake_ensure(scene, source, url, w, h, timeout=5, rewrite_settings=True):
+            seen.append({'source': source, 'rewrite': rewrite_settings, 'size': (w, h)})
+            return 1, []
+
+        monkeypatch.setattr(obs_ws, 'ensure_browser_input', fake_ensure)
+        monkeypatch.setattr(obs_ws, 'input_settings', lambda name, timeout=3: settings.get(name, {}))
+        obs_routes._input_settings.clear()
+        obs_routes._stale_size.clear()
+        yield obs_routes, seen, settings
+        obs_routes._input_settings.clear()
+        obs_routes._stale_size.clear()
+
+    def test_a_size_change_is_deferred_not_written(self, calls):
+        obs_routes, seen, _ = calls
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 1070, [], keep_running=True)
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 710, [], keep_running=True)
+        assert [c['rewrite'] for c in seen] == [True, False]
+        assert obs_routes.stale_render_count() == 1
+        assert obs_routes._input_settings['Player - A'] == ('u', 1270, 1070)   # the truth, not the wish
+
+    def test_a_url_change_still_writes_and_clears_the_stale_mark(self, calls):
+        obs_routes, seen, _ = calls
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 1070, [], keep_running=True)
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 710, [], keep_running=True)
+        obs_routes._ensure_input('S', 'Player - A', 'card', 1270, 710, [], keep_running=True)
+        assert [c['rewrite'] for c in seen] == [True, False, True]
+        assert obs_routes.stale_render_count() == 0
+
+    def test_a_fresh_process_learns_the_running_page_instead_of_rewriting(self, calls):
+        obs_routes, seen, settings = calls
+        settings['Player - A'] = {'url': 'u', 'width': 1270, 'height': 1070}
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 710, [], keep_running=True)
+        assert seen[-1]['rewrite'] is False and obs_routes.stale_render_count() == 1
+        settings['Player - B'] = {}                       # does not exist yet: created
+        obs_routes._ensure_input('S', 'Player - B', 'u', 1270, 710, [], keep_running=True)
+        assert seen[-1]['rewrite'] is True
+
+    def test_build_resizes(self, calls):
+        obs_routes, seen, _ = calls
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 1070, [], keep_running=True)
+        obs_routes._ensure_input('S', 'Player - A', 'u', 1270, 710, [])        # Build: resize=True path
+        assert [c['rewrite'] for c in seen] == [True, True]
+        assert obs_routes.stale_render_count() == 0

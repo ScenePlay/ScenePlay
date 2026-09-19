@@ -280,7 +280,7 @@ def test_state_document(dm_client, obs, fresh, monkeypatch):
     d = r.get_json()
     assert d['connected'] is True and d['program'] == 'ScenePlay Party' and d['preview'] == ''
     keys = [s['key'] for s in d['shots']]
-    assert keys == ['party', 'map', 'char:1', 'dm', 'pre', 'intermission', 'post']
+    assert keys == ['party', 'map', 'char:1', 'dm', 'pre', 'intermission', 'post', 'black']
     carl = next(s for s in d['shots'] if s['key'] == 'char:1')
     assert carl == {'key': 'char:1', 'label': 'Carl', 'scene': 'Player - Carl',
                     'kind': 'player', 'built': True, 'character_id': 1, 'hotkey': '1'}
@@ -456,12 +456,12 @@ def test_take_obs_rejection_is_reported(dm_client, obs, fresh, monkeypatch):
     assert body['ok'] is False and 'studio mode is off' in body['error']
 
 
-def test_transition_picker_is_gone(dm_client, obs, fresh, monkeypatch):
-    """The console has no transition dropdown of its own any more: the fade is
-    set once, on the Broadcast page, and every Take uses it."""
+def test_transition_picker_is_back(dm_client, obs, fresh, monkeypatch):
+    """2026-09-15 removed the console's picker; 2026-09-19 brought it back as a
+    SAVED choice (the Broadcast page's setting), on both consoles."""
     _party(monkeypatch)
     r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 700})
-    assert r.status_code in (404, 405)
+    assert r.status_code == 200 and r.get_json()['transition_ms'] == 700
 
 
 def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
@@ -484,7 +484,7 @@ def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
 
     seen.clear()                                   # featuring a player
     monkeypatch.setattr(ro, 'party_scene_name', lambda: 'ScenePlay Party')
-    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'warnings': []})
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None, resize=False: {'warnings': []})
     monkeypatch.setattr(obs_ws, 'current_state', lambda: {'current_scene': 'ScenePlay Map'})
     _payload, err = ro._do_feature(1)
     assert err is None and seen == [('ScenePlay Party', 'broadcast')]
@@ -737,7 +737,7 @@ def test_taking_a_player_shot_features_them_in_the_party_scene(dm_client, obs, f
     _party(monkeypatch)
     obs['state']['scenes'] = obs['state']['scenes'] + ['Player - Carl']
     featured = []
-    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: featured.append(featured_id) or {'warnings': []})
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None, resize=False: featured.append(featured_id) or {'warnings': []})
     monkeypatch.setattr(ro, '_set_featured', lambda cid: featured.append(('set', cid)))
     dm_client.post('/ttrpg/producer/api/arm', json={'key': 'char:1'})
     body = dm_client.post('/ttrpg/producer/api/take', json={}).get_json()
@@ -767,7 +767,7 @@ def test_build_party_also_builds_closeups(dm_client, obs, fresh, monkeypatch):
     import routers.obs as ro
     import routers.producer as p
     calls = []
-    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: {'scene': 'ScenePlay Party', 'tiles': [], 'warnings': []})
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None, resize=False: {'scene': 'ScenePlay Party', 'tiles': [], 'warnings': []})
     monkeypatch.setattr(ro, 'ensure_map_scene', lambda: ('ScenePlay Map', []))
     monkeypatch.setattr(ro, 'ensure_show_scenes', lambda: ({}, []))
     monkeypatch.setattr(ro, '_build_audio', lambda w, h, warnings: None)
@@ -794,12 +794,12 @@ def test_build_closeups_carries_the_party_audio(dm_client, obs, fresh, closeup_r
 
 def test_shots_carry_the_broadcast_page_hotkeys(dm_client, obs, fresh, monkeypatch):
     """1–9 count the players in tile order like the Broadcast page; 0 is the
-    whole party; B map, I intermission; pre/post have no key."""
+    whole party; B map, I intermission, P pre-show, O post-show, F blank screen."""
     _party(monkeypatch, names=('Carl', 'Donut'))
     d = dm_client.get('/ttrpg/producer/api/state').get_json()
     assert [(s['key'], s['hotkey']) for s in d['shots']] == [
         ('party', '0'), ('map', 'B'), ('char:1', '1'), ('char:2', '2'), ('dm', '3'),
-        ('pre', ''), ('intermission', 'I'), ('post', '')]
+        ('pre', 'P'), ('intermission', 'I'), ('post', 'O'), ('black', 'F')]
 
 
 def test_state_defaults_to_the_broadcast_page_transition(dm_client, obs, fresh, monkeypatch):
@@ -851,7 +851,7 @@ def spot(monkeypatch):
         raise AssertionError('the console spotlight must not cut program')
     monkeypatch.setattr(ro, '_do_feature', never)
     monkeypatch.setattr(ro, '_unfeature', never)
-    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None: calls.append(('layout', featured_id)) or {'warnings': []})
+    monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None, resize=False: calls.append(('layout', featured_id)) or {'warnings': []})
     monkeypatch.setattr(ro, '_set_featured', lambda cid: calls.append(('set', cid)))
     monkeypatch.setattr(ro, '_cancel_return', lambda: calls.append(('cancel_return',)))
     monkeypatch.setattr(ro, 'featured_id', lambda: next((c[1] for c in reversed(calls) if c[0] == 'set'), None))
@@ -995,3 +995,223 @@ def test_state_scenes_are_the_active_sessions_campaign_scenes(dm_client, obs, fr
     assert [s['sceneName'] for s in scenes] == ['Forest', 'Tavern']
     assert scenes[0]['obs_scene'] == 'ScenePlay Map' and scenes[1]['obs_scene'] is None
     assert set(scenes[0]) == {'scene_ID', 'sceneName', 'obs_scene'}
+
+
+# ── the producer on the stream (spec 2026-09-18 producer camera and barge) ──
+
+def test_barge_toggles_the_producer_tile(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as robs
+    from sql import appsettingGet
+    synced = []
+    monkeypatch.setattr(robs, 'stage_tile', lambda tile, settle_s=None: [])
+    monkeypatch.setattr(robs, '_sync_party_scene', lambda featured_id=None, resize=False: synced.append(featured_id) or {'warnings': []})
+    monkeypatch.setattr(robs, 'refresh_tiles', lambda: [])
+    monkeypatch.setattr(robs, 'featured_id', lambda: None)
+    r = dm_client.post('/ttrpg/producer/api/barge', json={'on': True}).get_json()
+    assert r['ok'] and r['on_screen'] is True and synced == [None]
+    assert appsettingGet('obs_producer_on_screen', '0') == '1'
+    assert appsettingGet('obs_producer_stream_id', '')                 # link minted
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()['producer']
+    assert d['on_screen'] is True and d['tile_id'] == robs.PRODUCER_TILE_ID
+    assert d['push_url'].startswith('https://vdo.ninja/?push=')
+    r = dm_client.post('/ttrpg/producer/api/barge', json={'on': False}).get_json()
+    assert r['on_screen'] is False and len(synced) == 2
+    assert appsettingGet('obs_producer_on_screen', '0') == '0'
+
+
+def test_profile_sets_the_name_on_stream(dm_client, obs, fresh):
+    r = dm_client.post('/ttrpg/producer/api/profile', json={'name': '  Eric \x01the Producer '}).get_json()
+    assert r == {'ok': True, 'name': 'Eric the Producer', 'icon': ''}
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['producer']['name'] == 'Eric the Producer'
+    dm_client.post('/ttrpg/producer/api/profile', json={'name': ''})
+    assert dm_client.get('/ttrpg/producer/api/state').get_json()['producer']['name'] == 'Producer'
+
+
+def test_producer_tile_is_last_on_the_grid_and_is_not_a_shot(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as robs
+    from sql import appsettingSet
+
+    class C:
+        video_feed_url = ''
+        video_stream_id = 'x'
+
+        def __init__(self, cid, name):
+            self.character_id, self.name = cid, name
+
+        def has_feed(self):
+            return True
+
+        def video_view_url(self):
+            return 'https://vdo.ninja/?view=x'
+
+    monkeypatch.setattr(robs, '_active_party', lambda: [C(2, 'Zed'), C(1, 'Carl')])
+    monkeypatch.setattr(robs, 'offstage_ids', lambda: set())
+    appsettingSet('obs_producer_on_screen', '1')
+    appsettingSet('obs_producer_name', 'Eric')
+    party = robs._ordered_party()
+    assert [c.name for c in party] == ['GM', 'Carl', 'Zed', 'Eric']          # DM first, producer LAST
+    assert party[-1].character_id == robs.PRODUCER_TILE_ID
+    assert robs._scene_name_for(party[-1]) == 'Producer - Eric'
+    assert robs.tile_url(robs.PRODUCER_TILE_ID).split('?')[0].endswith('/tile/producer')
+    assert robs.card_url(robs.PRODUCER_TILE_ID).split('?')[0].endswith('/card/producer')
+    # the audio strip has them, the shot row does not
+    rows = robs._mapping_rows(party, obs['state'])
+    assert [r['name'] for r in rows][-1] == 'Eric'
+    keys = [s['key'] for s in dm_client.get('/ttrpg/producer/api/state').get_json()['shots']]
+    assert f'char:{robs.PRODUCER_TILE_ID}' not in keys and 'char:1' in keys
+    appsettingSet('obs_producer_on_screen', '0')
+    assert 'Eric' not in [c.name for c in robs._ordered_party()]
+
+
+def test_producer_link_receives_video_where_players_do_not(dm_client, obs, fresh):
+    from models.ttrpg import _vdo_url
+    from sql import appsettingSet
+    appsettingSet('obs_vdo_room', 'tableroom')
+    appsettingSet('obs_room_audio_only', '1')
+    try:
+        assert '&novideo' in _vdo_url('push', 'abc')
+        pro = _vdo_url('push', 'abc', producer=True)
+        assert '&novideo' not in pro and '&room=tableroom' in pro and '&maxvideobitrate=' in pro
+        assert '&novideo' not in _vdo_url('view', 'abc')
+    finally:
+        appsettingSet('obs_vdo_room', '')
+
+
+def test_producer_card_and_tile_routes_are_token_gated(dm_client, obs, fresh):
+    import routers.obs as robs
+    from sql import appsettingSet
+    appsettingSet('obs_producer_name', 'Eric')
+    assert dm_client.get('/ttrpg/obs/card/producer/state?t=nope').status_code == 403
+    t = robs._card_token(robs.PRODUCER_TILE_ID)
+    d = dm_client.get(f'/ttrpg/obs/card/producer/state?t={t}').get_json()
+    assert d['name'] == 'Eric' and d['is_dm'] is False and d['feed_url'].startswith('https://vdo.ninja/?view=')
+    assert dm_client.get(f'/ttrpg/obs/tile/producer?t={t}').status_code == 200
+
+
+def test_transition_picker_saves_the_shared_setting(dm_client, obs, fresh):
+    """The Take fade chosen on the console is the Broadcast page's setting."""
+    from sql import appsettingGet
+    r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 750}).get_json()
+    assert r == {'ok': True, 'transition': 'Fade', 'transition_ms': 750, 'fixed': False}
+    assert appsettingGet('obs_transition', '') == 'Fade' and appsettingGet('obs_transition_ms', '') == '750'
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['transition'] == 'Fade' and d['transition_ms'] == 750 and d['transitions_fixed'] == ['Cut']
+    # a fixed transition takes no duration, but the saved fade length is REMEMBERED
+    # for when Fade comes back; unknown names and silly durations are refused / clamped
+    r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Cut', 'ms': 900}).get_json()
+    assert r['transition_ms'] == 750 and r['fixed'] is True
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()
+    assert d['transition'] == 'Cut' and d['transition_ms'] == 750 and d['transition_fixed'] is True
+    r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 750}).get_json()
+    assert r['transition_ms'] == 750 and r['fixed'] is False
+    assert dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Wipe', 'ms': 300}).status_code == 400
+    r = dm_client.post('/ttrpg/producer/api/transition', json={'name': 'Fade', 'ms': 99999}).get_json()
+    assert r['transition_ms'] == 10000
+    # and Take uses it
+    obs['state']['preview_scene'] = 'ScenePlay Map'
+    dm_client.post('/ttrpg/producer/api/take', json={})
+    assert ('transition', 'Fade', 10000) in obs['calls']
+
+
+def test_leaving_the_grid_prunes_the_producer_tile(dm_client, obs, fresh, monkeypatch):
+    """Bug 2026-09-19: after un-barging, the producer's tile and overlay stayed
+    in the party scene because pruning only knew the Player/DM prefixes."""
+    import routers.obs as robs
+    import integrations.obs_ws as obs_ws
+    present = {'Player - Carl Cam': 1, 'Player - Carl Overlay': 2, 'DM - Jankis Cam': 3,
+               'Producer - Eric Cam': 4, 'Producer - Eric Overlay': 5, 'Lower Third': 6}
+    removed = []
+    monkeypatch.setattr(obs_ws, 'scene_items', lambda scene: dict(present))
+    monkeypatch.setattr(obs_ws, 'remove_item', lambda scene, item_id: removed.append(item_id))
+    warnings = []
+    robs._prune_party_scene('ScenePlay Party', {'Player - Carl Cam', 'Player - Carl Overlay', 'DM - Jankis Cam'}, warnings)
+    assert sorted(removed) == [4, 5] and warnings == []      # the producer goes, the DM's lower third stays
+
+
+def test_barge_stages_the_source_before_the_reflow(dm_client, obs, fresh, monkeypatch):
+    """Choppy barge-in (2026-09-19): the browser source was created mid-animation."""
+    import routers.obs as robs
+    order = []
+    monkeypatch.setattr(robs, 'stage_tile', lambda tile, settle_s=None: order.append(('stage', tile.name)) or [])
+    monkeypatch.setattr(robs, '_sync_party_scene', lambda featured_id=None, resize=False: order.append(('sync', featured_id)) or {'warnings': []})
+    monkeypatch.setattr(robs, 'refresh_tiles', lambda: [])
+    monkeypatch.setattr(robs, 'featured_id', lambda: None)
+    dm_client.post('/ttrpg/producer/api/profile', json={'name': 'Eric'})
+    dm_client.post('/ttrpg/producer/api/barge', json={'on': True})
+    assert order == [('stage', 'Eric'), ('sync', None)]
+    order.clear()
+    dm_client.post('/ttrpg/producer/api/barge', json={'on': False})
+    assert order == [('sync', None)]                      # leaving needs no staging
+
+
+def test_stage_tile_parks_the_source_off_canvas_and_waits(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as robs
+    import integrations.obs_ws as obs_ws
+    from sql import appsettingSet
+    appsettingSet('obs_producer_name', 'Eric')
+    calls = []
+    monkeypatch.setattr(obs_ws, 'ensure_scene', lambda name: calls.append(('scene', name)))
+    monkeypatch.setattr(robs, '_ensure_input', lambda scene, source, url, w, h, warnings: calls.append(('input', source, w, h)) or (len(calls)))
+    monkeypatch.setattr(obs_ws, 'place_item', lambda scene, item_id, rect, timeout=3: calls.append(('place', item_id, rect['x'] >= 1920)))
+    monkeypatch.setattr(obs_ws, 'set_item_enabled', lambda scene, item_id, on, timeout=3: calls.append(('enable', item_id, on)))
+    monkeypatch.setattr(robs, '_ordered_party', lambda include_offstage=False: [robs.producer_tile()])
+    slept = []
+    import time as _t
+    monkeypatch.setattr(_t, 'sleep', lambda s: slept.append(s))
+    assert robs.stage_tile(robs.producer_tile()) == []
+    inputs = [c for c in calls if c[0] == 'input']
+    assert [c[1] for c in inputs] == ['Producer - Eric Cam', 'Producer - Eric Overlay']
+    assert all(c[2] for c in calls if c[0] == 'place'), 'parked off-canvas, never on the grid'
+    assert slept == [robs.BARGE_SETTLE_S]
+
+
+def test_new_tile_blooms_from_its_cell_centre():
+    import routers.obs as robs
+    start = robs._bloom_start({'x': 100.0, 'y': 50.0, 'w': 400.0, 'h': 300.0})
+    assert start == {'x': 300.0, 'y': 200.0, 'w': 1.0, 'h': 1.0}
+
+
+def test_only_build_resizes_running_tiles(dm_client, obs, fresh, monkeypatch):
+    import routers.obs as robs
+    seen = []
+    monkeypatch.setattr(robs, '_sync_party_scene', lambda featured_id=None, resize=False: seen.append(resize) or {'warnings': []})
+    monkeypatch.setattr(robs, 'stage_tile', lambda tile, settle_s=None: [])
+    monkeypatch.setattr(robs, 'refresh_tiles', lambda: [])
+    monkeypatch.setattr(robs, 'featured_id', lambda: None)
+    dm_client.post('/ttrpg/producer/api/barge', json={'on': True})
+    dm_client.post('/ttrpg/producer/api/spotlight', json={'key': ''})
+    assert seen == [False, False]                              # reflows keep running sources
+    assert 'stale_tiles' in dm_client.get('/ttrpg/producer/api/state').get_json()
+
+
+def test_producer_symbol_is_picked_from_the_list_and_shows_on_stream(dm_client, obs, fresh):
+    import routers.obs as robs
+    r = dm_client.post('/ttrpg/producer/api/profile', json={'name': 'Eric', 'icon': '🎬'}).get_json()
+    assert r == {'ok': True, 'name': 'Eric', 'icon': '🎬'}
+    d = dm_client.get('/ttrpg/producer/api/state').get_json()['producer']
+    assert d['icon'] == '🎬' and '🎲' in d['icons'] and d['icons'][0] == ''
+    t = robs._card_token(robs.PRODUCER_TILE_ID)
+    card = dm_client.get(f'/ttrpg/obs/card/producer/state?t={t}').get_json()
+    assert card['name'] == '🎬 Eric' and card['icon'] == '🎬'
+    # anything off the list is refused quietly; omitting icon leaves it alone
+    assert dm_client.post('/ttrpg/producer/api/profile', json={'name': 'Eric', 'icon': '<script>'}).get_json()['icon'] == ''
+    dm_client.post('/ttrpg/producer/api/profile', json={'name': 'Eric', 'icon': '🐉'})
+    assert dm_client.post('/ttrpg/producer/api/profile', json={'name': 'Eric B'}).get_json()['icon'] == '🐉'
+
+
+def test_blank_screen_is_a_silent_empty_scene_made_on_demand(dm_client, obs, fresh, monkeypatch):
+    """The producer's default blank screen (F): an empty OBS scene, created when
+    first armed, and never wired for the table's audio."""
+    import routers.obs as robs
+    import integrations.obs_ws as obs_ws
+    _party(monkeypatch)
+    made = []
+    monkeypatch.setattr(obs_ws, 'ensure_scene', lambda name: (made.append(name), obs['state']['scenes'].append(name)))
+    monkeypatch.setattr(obs_ws, 'scene_list', lambda refresh=False: list(obs['state']['scenes']))
+    shots = dm_client.get('/ttrpg/producer/api/state').get_json()['shots']
+    blank = next(s for s in shots if s['key'] == 'black')
+    assert blank['label'] == 'blank screen' and blank['hotkey'] == 'F' and blank['built'] is False
+    r = dm_client.post('/ttrpg/producer/api/arm', json={'key': 'black'}).get_json()
+    assert r['ok'] and r['scene'] == 'ScenePlay Black' and made == ['ScenePlay Black']
+    assert ('preview', 'ScenePlay Black') in obs['calls']
+    assert robs.CUT_TARGETS['black'][1] == 'blank screen'

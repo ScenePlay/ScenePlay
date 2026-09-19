@@ -15,6 +15,9 @@ export function createConsole(ctx, root, onRefresh = null) {
   let sceneStates = {};      // scene_ID -> 'all'|'some'|'none' from the queue topic
   let activeScene = null;    // {id, name} of the scene ScenePlay is playing
   let rows = [];             // OBS audio rows (from /ttrpg/obs/api/state)
+  let musicDb = 0;                // the music bed's OBS fader, dB
+  let faderBusy = false, stripDirty = false;   // a drag in progress holds strip repaints
+  const FADER_MIN = -30, FADER_MAX = 10, FADER_EVERY_MS = 120;   // FADER_MIN/MAX mirror routers.obs.VOLUME_DB_*
   let shotSig = '';          // signature of state.shots' (character_id, scene) pairs, to
                               // notice when the strip's per-row meter key needs recomputing
   const failures = { program: 0, preview: 0 };
@@ -53,9 +56,12 @@ export function createConsole(ctx, root, onRefresh = null) {
     $('#pc-rec-pill', root).className = 'badge ' + (d.recording ? 'bg-danger' : 'bg-secondary');
     $('#pc-consoles', root).textContent = `${d.consoles} console${d.consoles === 1 ? '' : 's'}`;
     $('#pc-autocam', root).checked = !d.auto_cam_paused;
+    paintProducer(d.producer);
+    const st = $('#pc-stale', root); if (st) { st.hidden = !d.stale_tiles; st.textContent = d.stale_tiles ? `${d.stale_tiles} tile${d.stale_tiles === 1 ? '' : 's'} render at an old size (the grid changed size) — Rebuild at a break; it reloads every camera.` : ''; }
     // The Take button says what it will do: the fade is the Broadcast page's.
-    const fade = $('#pc-take-fade', root); if (fade) fade.textContent = (d.transition || 'Cut') + (d.transition_ms ? ' ' + d.transition_ms + 'ms' : '');
+    const fade = $('#pc-take-fade', root); if (fade) fade.textContent = (d.transition || 'Cut') + (d.transition_ms && !d.transition_fixed ? ' ' + d.transition_ms + 'ms' : '');
     paintMapMode(d.map_mode);
+    paintFade(d);
     for (const b of $$('.pc-shot', root)) {
       const s = d.shots.find(x => x.key === b.dataset.shot);
       b.classList.toggle('live', !!s && s.scene === d.program);
@@ -65,8 +71,9 @@ export function createConsole(ctx, root, onRefresh = null) {
     for (const b of $$('.pc-shot', root)) {
       const s = d.shots.find(x => x.key === b.dataset.shot);
       b.classList.toggle('featured', !!s && s.character_id != null && s.character_id === d.featured_id);
+      // The Party tile's reset badge lights while the grid is in its even layout.
+      const rs = b.querySelector('.pc-reset'); if (rs) rs.classList.toggle('on', d.featured_id == null);
     }
-    const g = $('#pc-group', root); if (g) g.disabled = !d.connected;
     const scenesSig = JSON.stringify(d.scenes || []);
     if (scenesSig !== lastScenesSig) { lastScenesSig = scenesSig; loadScenes(); }
     const linksSig = JSON.stringify([d.scene_links, d.scene_links_live]);
@@ -80,6 +87,46 @@ export function createConsole(ctx, root, onRefresh = null) {
     const sig = JSON.stringify(d.shots.map(s => [s.character_id, s.scene]));
     if (sig !== shotSig) { shotSig = sig; if (rows.length) paintStrip(); }
     paintMarkers(d.markers || []);
+  }
+
+  function paintProducer(p) {
+    if (!p) return;
+    const b = $('#pc-barge', root); if (!b) return;
+    b.className = 'btn btn-sm ' + (p.on_screen ? 'btn-warning' : 'btn-outline-warning');
+    b.textContent = p.on_screen ? 'Leave grid' : 'Barge in';
+    const cam = $('#pc-producer-cam', root); if (cam && p.push_url) cam.href = p.push_url;
+    const feed = $('#pc-producer-feed', root);
+    if (feed) feed.textContent = p.feed === 'live' ? 'camera live' : p.feed === 'stale' ? 'camera dropped' : '';
+    const name = $('#pc-producer-name', root);
+    if (name && document.activeElement !== name) name.value = p.name || 'Producer';
+    const ic = $('#pc-producer-icon', root);
+    if (ic && document.activeElement !== ic && ic.value !== (p.icon || '')) ic.value = p.icon || '';
+  }
+
+  // The Take fade: type and length, saved on the server (obs_transition /
+  // obs_transition_ms) so the Broadcast page and every Take agree.
+  const FADE_MS = [250, 500, 750, 1000, 1500, 2000];
+  function paintFade(d) {
+    const type = $('#pc-fade-type', root), ms = $('#pc-fade-ms', root);
+    if (!type || !ms) return;
+    const names = d.transitions || [];
+    const fixed = new Set(d.transitions_fixed || []);
+    if (document.activeElement !== type) {
+      const cur = d.transition || '';
+      const opts = names.length ? names : (cur ? [cur] : []);
+      render(type, html`${opts.map(n => html`<option value="${n}" ?selected=${n === cur}>${n}</option>`)}`);
+      type.disabled = !names.length;
+    }
+    if (document.activeElement !== ms) {
+      const cur = Number(d.transition_ms) || 0;
+      const list = FADE_MS.includes(cur) || cur === 0 ? FADE_MS : [...FADE_MS, cur].sort((a, b) => a - b);
+      render(ms, html`${[0, ...list].map(v => html`<option value="${v}" ?selected=${v === cur}>${v === 0 ? 'Cut' : v + ' ms'}</option>`)}`);
+      ms.disabled = !!d.transition_fixed || fixed.has(d.transition || '');   // Cut: greyed, length remembered
+    }
+  }
+  async function setFade() {
+    const r = await api.post(`${P}/transition`, { name: $('#pc-fade-type', root).value, ms: Number($('#pc-fade-ms', root).value) }, { quiet: true }).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) toast.warn(r.error || 'Could not save the transition');
   }
 
   function paintMarkers(ms) {
@@ -105,7 +152,17 @@ export function createConsole(ctx, root, onRefresh = null) {
         ${s.sceneName}${sceneLinks[s.scene_ID] ? html`<span class="pc-link ${sceneLinksLive ? '' : 'off'}" title="${sceneLinksLive ? 'Activating this scene also cuts OBS to ' + sceneLinks[s.scene_ID] : 'Linked to ' + sceneLinks[s.scene_ID] + ' — scene link is switched off on the Broadcast page'}">&rarr; ${sceneLinks[s.scene_ID]}</span>` : ''}</button>`; })}`);
   }
 
+  // One OBS fader per row, in dB. The value is the server's (persisted like
+  // the mutes, re-asserted by every build), so what this slider shows is what
+  // the OBS mixer shows.
+  const fmtDb = db => (db > 0 ? '+' : '') + Math.round(db) + ' dB';
+  const fader = (key, db) => html`<input type="range" class="form-range pc-fader" data-fader="${key}" min="${FADER_MIN}" max="${FADER_MAX}" step="1" value="${Math.round(db)}"
+      title="Level on the stream (double-click: 0 dB)"><span class="pc-db" data-db-for="${key}">${fmtDb(db)}</span>`;
   function paintStrip() {
+    // A refresh mid-drag would replace the slider under the pointer; hold the
+    // repaint until the hand lets go.
+    if (faderBusy) { stripDirty = true; return; }
+    stripDirty = false;
     // The OBS row only knows the shared party scene; the per-character cam
     // source (what obs_ws.levels() is actually keyed by) lives on this
     // console's own state.shots, keyed by character_id.
@@ -114,10 +171,30 @@ export function createConsole(ctx, root, onRefresh = null) {
       const source = shot ? shot.scene + ' Cam' : '';
       return html`
       <div class="d-flex align-items-center gap-2"><span style="width:7rem" class="text-truncate">${r.name}</span>
-        <div class="pc-meter flex-grow-1" data-level="${source}"><span></span></div></div>
+        <div class="pc-meter flex-grow-1" data-level="${source}"><span></span></div>${fader(r.character_id, r.volume_db)}</div>
       <button type="button" class="btn btn-sm ${r.muted ? 'btn-danger' : 'btn-outline-secondary'}" data-mute="${r.character_id}" data-muted="${r.muted ? 1 : 0}">${r.muted ? 'Unmute' : 'M'}</button>`; })}
       <div class="d-flex align-items-center gap-2"><span style="width:7rem">Music</span>
-        <div class="pc-meter flex-grow-1" data-level="ScenePlay Music|ScenePlay Music Feed"><span></span></div></div><span></span>`);
+        <div class="pc-meter flex-grow-1" data-level="ScenePlay Music|ScenePlay Music Feed"><span></span></div>${fader('music', musicDb)}</div><span></span>`);
+  }
+  // Faders post while dragging, at most every FADER_EVERY_MS per fader, then
+  // once more on release so the final position always lands.
+  const faderTimers = {};
+  function postFader(key, db, now) {
+    const body = key === 'music' ? { target: 'music', db } : { character_id: Number(key), db };
+    const send = async () => {
+      const r = await api.post('/ttrpg/obs/api/volume', body, { quiet: true }).catch(() => null);
+      if (r && !r.ok) toast.warn(r.error);
+    };
+    if (now) { clearTimeout(faderTimers[key]); delete faderTimers[key]; return send(); }
+    if (faderTimers[key]) return;
+    faderTimers[key] = setTimeout(() => { delete faderTimers[key]; send(); }, FADER_EVERY_MS);
+  }
+  function setFader(el, db, now) {
+    el.value = db;
+    const lab = $(`[data-db-for="${el.dataset.fader}"]`, root); if (lab) lab.textContent = fmtDb(db);
+    if (el.dataset.fader === 'music') musicDb = db;
+    else { const r = rows.find(x => String(x.character_id) === el.dataset.fader); if (r) r.volume_db = db; }
+    postFader(el.dataset.fader, db, now);
   }
 
   function paintLevels(lv) {
@@ -272,7 +349,9 @@ export function createConsole(ctx, root, onRefresh = null) {
       // per-character cam OBS actually meters.
       rows = (d.rows || []).filter(r => r.on_stream).map(r => ({
         name: r.name, character_id: r.character_id, muted: !!r.muted,
+        volume_db: Number(r.volume_db) || 0,
       }));
+      musicDb = Number(d.music_volume_db) || 0;
       paintStrip();
     } catch (e) { /* OBS state is optional here */ }
   }
@@ -297,10 +376,12 @@ export function createConsole(ctx, root, onRefresh = null) {
       const mu = e.target.closest('[data-mute]'); if (mu) { await api.post('/ttrpg/obs/api/mute', { character_id: Number(mu.dataset.mute), muted: mu.dataset.muted !== '1' }); return loadRows(); }
       switch (e.target.closest('button, .pc-clock') && (e.target.closest('button, .pc-clock').id)) {
         case 'pc-build-closeups': return buildCloseups();
-        case 'pc-group': return spotlight('');
         case 'pc-take': return take();
         case 'pc-mapmode': return mapMode();
         case 'pc-marker': return marker();
+        case 'pc-barge': { const r = await api.post(`${P}/barge`, { on: !(state && state.producer && state.producer.on_screen) }); if (r.warnings && r.warnings.length) toast.warn(r.warnings[0]); return; }
+        case 'pc-producer-save': { const r = await api.post(`${P}/profile`, { name: $('#pc-producer-name', root).value, icon: $('#pc-producer-icon', root).value }); toast.success(`On stream as ${r.icon ? r.icon + ' ' : ''}${r.name}`); return; }
+        case 'pc-markers-clear': if (confirm('Clear every marker of this session?')) return api.del(`${P}/markers`); return;
         case 'pc-mute-all': return muteAll();
         case 'pc-mute-everyone': return muteEveryone(true);
         case 'pc-unmute-all': return muteEveryone(false);
@@ -311,8 +392,17 @@ export function createConsole(ctx, root, onRefresh = null) {
         case 'pc-clock': if (confirm('Reset the session clock?')) return api.post(`${P}/clock/reset`); return;
       }
     });
+    ctx.on($('#pc-fade-type', root), 'change', setFade);
+    ctx.on($('#pc-fade-ms', root), 'change', setFade);
     ctx.on($('#pc-autocam', root), 'change', e => api.post(`${P}/auto-cam-pause`, { paused: !e.target.checked }));
     ctx.on($('#pc-vol', root), 'change', e => api.post('/set_volume', { volume: Number(e.target.value) }));
+    // OBS faders: label and throttled post while dragging, a final post on
+    // release, double-click back to unity. Delegated: the strip is re-rendered.
+    ctx.on(root, 'input', e => { const f = e.target.closest('.pc-fader'); if (f) setFader(f, Number(f.value), false); });
+    ctx.on(root, 'change', e => { const f = e.target.closest('.pc-fader'); if (f) setFader(f, Number(f.value), true); });
+    ctx.on(root, 'dblclick', e => { const f = e.target.closest('.pc-fader'); if (f) setFader(f, 0, true); });
+    ctx.on(root, 'pointerdown', e => { if (e.target.closest('.pc-fader')) faderBusy = true; });
+    ctx.on(document, 'pointerup', () => { if (!faderBusy) return; faderBusy = false; if (stripDirty) paintStrip(); });
     ctx.on($('#pc-marker-note', root), 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); marker(); } });
     ctx.on(document, 'keydown', e => {
       const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -326,7 +416,7 @@ export function createConsole(ctx, root, onRefresh = null) {
       if (e.key === 'Escape') { api.post(`${P}/arm`, { key: '' }, { quiet: true }).catch(() => {}); return; }
       if (!state || !state.connected) return;   // same OBS-backed gate the mouse controls respect
       // Shot hotkeys come from the state document (the Broadcast page's
-      // mapping: digits = tiles in party order, 0 party, B map, I intermission).
+      // mapping: digits = tiles in party order, 0 party, B map, I intermission, P pre-show, O post-show, F blank screen).
       const hk = e.key.length === 1 ? e.key.toUpperCase() : '';
       // Shift+digit spotlights that player inside the party scene (live);
       // Shift+0 evens the table out. Digit codes are used because Shift
@@ -337,7 +427,7 @@ export function createConsole(ctx, root, onRefresh = null) {
         else { const s = (state.shots || []).find(x => x.hotkey === digit); if (s && s.kind !== 'special') spotlight(s.key); }
         e.preventDefault(); return;
       }
-      const target = hk && /^[0-9BI]$/.test(hk) ? (state.shots || []).find(s => s.hotkey === hk) : null;
+      const target = hk && /^[0-9BIPOF]$/.test(hk) ? (state.shots || []).find(s => s.hotkey === hk) : null;
       if (target) { const b = root.querySelector(`.pc-shot[data-shot="${target.key}"]`); if (b && !b.disabled && !b.classList.contains('unbuilt')) arm(target.key); e.preventDefault(); }
       else if (e.key === 'Enter') { take(); e.preventDefault(); }
       else if (e.key === 'm' || e.key === 'M') { muteAll(); e.preventDefault(); }

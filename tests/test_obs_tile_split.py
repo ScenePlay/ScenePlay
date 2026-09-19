@@ -108,6 +108,8 @@ class TestTileAudio:
                             lambda n, m, **k: calls['mute'].append((n, m)))
         monkeypatch.setattr(obs_ws, 'set_audio_monitor',
                             lambda n, t, **k: calls['monitor'].append((n, t)))
+        # The fader is the third call every build makes; not under test here.
+        monkeypatch.setattr(obs_ws, 'set_input_volume', lambda n, level, **k: None)
         return calls
 
     def test_dm_tile_is_muted_by_default(self, app, settings, obs):

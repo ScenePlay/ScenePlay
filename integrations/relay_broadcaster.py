@@ -1149,9 +1149,12 @@ def push_session_users():
     if not cfg:
         return
     from models.user import tblUsers
+    # `role` lets the portal open the producer console for DM accounts only
+    # (remote never gets the GM secret; a DM login is a producer login).
     users = [{'username': u.username,
               'display_name': u.display_name,
-              'password_hash': u.password_hash or ''}
+              'password_hash': u.password_hash or '',
+              'role': 'dm' if (u.role or '') == 'dm' else 'player'}
              for u in tblUsers.query.filter_by(active=1).all()]
     if not users:
         return

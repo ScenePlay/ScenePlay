@@ -88,6 +88,11 @@ def start(app):
     _thread = threading.Thread(target=_run, daemon=True, name='relay-gm-ws')
     _thread.start()
     log.info('Relay GM WebSocket manager started')
+    try:
+        import integrations.relay_producer as rp
+        rp.start(app)
+    except Exception as exc:
+        log.info('relay_producer start failed: %s', exc)
 
 
 def stop():
@@ -96,6 +101,11 @@ def stop():
     _wakeup.set()
     _close_socket()
     _set_state('disabled')
+    try:
+        import integrations.relay_producer as rp
+        rp.stop()
+    except Exception:
+        pass
 
 
 def restart():
@@ -140,6 +150,14 @@ def request(msg_type, payload, timeout=5):
         return reply
     finally:
         _pending.pop(mid, None)
+
+
+def send_event(msg_type, payload):
+    """Fire-and-forget frame (no id, no reply): producer state and frames.
+    Raises WsUnavailable when not connected or the send fails."""
+    if _state != 'connected':
+        raise WsUnavailable('not connected')
+    _send({'type': msg_type, 'payload': payload})
 
 
 def get_presence_cached():
@@ -262,6 +280,11 @@ def _run():
             rr.resume()
             _close_socket()
             _fail_pending()
+            try:
+                import integrations.relay_producer as rp
+                rp.link_down()          # no socket: no remote consoles
+            except Exception:
+                pass
             if not _stop.is_set():
                 _set_state('reconnecting')
         if time.monotonic() - started > _HEALTHY_RUN_S:
@@ -351,6 +374,11 @@ def _apply_hello(hello, cfg):
 
     _update_presence(hello.get('presence') or {})
     rr.note_sync_ok()
+    try:
+        import integrations.relay_producer as rp
+        rp.link_up(hello)
+    except Exception as exc:
+        log.info('producer link_up failed: %s', exc)
 
 
 def _handle_event(frame, cfg):
@@ -377,6 +405,12 @@ def _handle_event(frame, cfg):
             rr.apply_relay_tokens(data.get('tokens') or [], map_state)
         elif ftype == 'health_update':
             pass    # local is HP authority; hp arrives as an hp_delta mutation
+        elif ftype == 'producer_command':
+            import integrations.relay_producer as rp
+            rp.enqueue(data)
+        elif ftype == 'producer_presence':
+            import integrations.relay_producer as rp
+            rp.set_presence(data.get('consoles', 0))
         rr.note_sync_ok()
     except Exception as exc:
         log.warning('GM WebSocket event %s failed: %s', ftype, exc)

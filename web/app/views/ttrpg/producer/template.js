@@ -6,6 +6,7 @@ const shotTile = (s, i) => html`<button type="button" class="pc-shot ${s.built ?
   title="${s.built ? 'Arm ' + s.label : s.label + (s.kind === 'special' ? ': scene not built — run Build on the Broadcast page' : ': closeup scene not built — click Build closeups')}">
   <img alt="" data-snap="${s.key}"><span class="pc-key">${s.hotkey || ''}</span>
   ${s.kind === 'special' ? '' : html`<span class="pc-spot" data-spot="${s.key}" title="Spotlight ${s.label} in the party scene — sets the layout, never cuts (Shift+${s.hotkey || 'click'})">&#9728;</span>`}
+  ${s.key === 'party' ? html`<span class="pc-spot pc-reset" data-spot="" title="Reset the party grid to the even layout — sets the layout, never cuts (Shift+0)">&#8862;</span>` : ''}
   <span class="pc-shot-label">${s.label}</span></button>`;
 
 // The battle map's AUTO / 2D / 3D button, same words: auto is the stream's
@@ -29,6 +30,7 @@ export function render(d) {
         <span class="badge ${d.recording ? 'bg-danger' : 'bg-secondary'}" id="pc-rec-pill">REC</span></span></div>
     <div class="small text-secondary"><span id="pc-updated" title="When this console last received the server's state">updated —</span> &middot; <span id="pc-consoles">${d.consoles} console${d.consoles === 1 ? '' : 's'}</span></div>
     <button type="button" class="btn btn-sm btn-outline-secondary w-100 mt-1" id="pc-rebuild" title="Run the Broadcast page's Build: party scene, map, show cards, audio and the closeup scenes">&#128295; Rebuild scenes</button>
+    <div class="small text-warning" id="pc-stale" hidden></div>
     <div class="pc-clock" id="pc-clock" title="Session clock (click to reset)">00:00:00</div>
     <div class="small text-secondary" id="pc-session">${d.session ? d.session.title : 'no active session'}</div>
     <div class="mt-2 d-flex align-items-center gap-1">
@@ -40,9 +42,24 @@ export function render(d) {
       <input type="text" class="form-control form-control-sm" id="pc-marker-note" placeholder="marker note (K)">
       <button type="button" class="btn btn-sm btn-ttrpg" id="pc-marker">&#9873;</button></div>
     <div class="pc-markers mt-1" id="pc-markers"></div>
+    <button type="button" class="btn btn-sm btn-link text-secondary p-0 mt-1" id="pc-markers-clear" title="Remove every marker of this session (the recording's chapters stay)">clear markers</button>
     <div class="form-check form-switch mt-2 small">
       <input class="form-check-input" type="checkbox" id="pc-autocam" ${d.auto_cam_paused ? '' : 'checked'}>
       <label class="form-check-label" for="pc-autocam">Let auto-cam run</label></div>
+    <div class="mt-2 pt-2 border-top small" id="pc-producer">
+      <div class="d-flex align-items-center gap-1 mb-1"><b>Producer</b>
+        <span class="text-secondary" id="pc-producer-feed" title="Your camera link's state">${d.producer && d.producer.feed === 'live' ? 'camera live' : d.producer && d.producer.feed === 'stale' ? 'camera dropped' : ''}</span></div>
+      <div class="d-flex gap-1 mb-1">
+        <select class="form-select form-select-sm pc-fade-sel" id="pc-producer-icon" title="Symbol beside your name on stream">${(d.producer && d.producer.icons || ['']).map(i => html`<option value="${i}" ?selected=${i === ((d.producer && d.producer.icon) || '')}>${i || '—'}</option>`)}</select>
+        <input type="text" class="form-control form-control-sm" id="pc-producer-name" maxlength="60" placeholder="name on stream"
+          value="${d.producer ? d.producer.name : 'Producer'}" title="The name on your tile">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="pc-producer-save">Save</button></div>
+      <div class="d-flex gap-1">
+        <button type="button" class="btn btn-sm ${d.producer && d.producer.on_screen ? 'btn-warning' : 'btn-outline-warning'}" id="pc-barge"
+          title="Barge in: your camera joins the party grid in the last tile (and your mic reaches the stream). Leave: the tile goes, and with it your sound on air.">${d.producer && d.producer.on_screen ? 'Leave grid' : 'Barge in'}</button>
+        <a class="btn btn-sm btn-outline-secondary" id="pc-producer-cam" href="${d.producer ? d.producer.push_url : '#'}" target="_blank" rel="noopener"
+          title="Open your camera page. It joins the table's room, so you hear every mic and the music and see every camera while you switch.">&#127909; Camera</a></div>
+    </div>
     <div class="mt-2 small text-secondary" id="pc-talkback-slot"></div>
   </div>
 
@@ -53,9 +70,10 @@ export function render(d) {
       <span class="small text-secondary ms-2">Player shots need their closeup scenes in OBS.</span></div>
     <div class="d-flex flex-wrap align-items-center gap-2">
       <button type="button" class="btn btn-danger pc-take" id="pc-take" title="Take the armed Preview shot to Program with the Broadcast page's transition (Enter)">TAKE &#9654; <span class="small fw-normal" id="pc-take-fade">${d.transition || 'Cut'}${d.transition_ms ? ' ' + d.transition_ms + 'ms' : ''}</span></button>
+      <select class="form-select form-select-sm pc-fade-sel" id="pc-fade-type" title="Transition every Take uses (saved; shared with the Broadcast page)"></select>
+      <select class="form-select form-select-sm pc-fade-sel" id="pc-fade-ms" title="Fade length (saved; shared with the Broadcast page)"></select>
       <button type="button" class="btn btn-outline-secondary pc-mapmode" id="pc-mapmode" data-mode="${d.map_mode || 'auto'}" title="Map on stream: auto (3D when someone moves), 2D, or 3D (V)">${mapModeLabel(d.map_mode)}</button>
-      <button type="button" class="btn btn-outline-warning btn-sm" id="pc-group" title="Even the party out again — sets the layout, never cuts (Shift+0)">&#9728; Group</button>
-      <span class="small text-secondary ms-auto">1–9 arm player &middot; Shift+1–9 spotlight in party (no cut) &middot; Shift+0 group &middot; 0 party &middot; B map &middot; I intermission &middot; Enter take &middot; V map view &middot; M mute all &middot; K marker &middot; Esc clear</span>
+      <span class="small text-secondary ms-auto">1–9 arm player &middot; Shift+1–9 spotlight in party (no cut) &middot; Shift+0 group &middot; 0 party &middot; B map &middot; P pre &middot; I intermission &middot; O post &middot; F blank &middot; Enter take &middot; V map view &middot; M mute all &middot; K marker &middot; Esc clear</span>
     </div>
   </div>
 
@@ -66,9 +84,10 @@ export function render(d) {
     <div class="d-flex flex-wrap gap-1 mb-2" id="pc-scenes"></div>
     <div class="d-flex gap-1">
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/nextsong">Skip &#9197;</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/music_stopstart" title="Pause or resume the music player (the same toggle the player bar has)">Play/Pause &#9199;</button>
       <button type="button" class="btn btn-sm btn-outline-danger" data-sp="/killqueue">Kill &#9209;</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/api/lights-off">Lights off</button>
-      <input type="range" class="form-range ms-2" id="pc-vol" min="0" max="100" style="width:8rem" title="music volume"></div>
+      <input type="range" class="form-range ms-2" id="pc-vol" min="0" max="100" style="width:8rem" title="Room music volume — the music player itself, not what the stream hears (that fader is in the Audio card)"></div>
   </div>
 
   <div class="pc-audio ttrpg-card p-2">

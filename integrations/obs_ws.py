@@ -561,6 +561,17 @@ def ensure_browser_input(scene_name, source_name, url, width, height, timeout=5,
     return item_id, warnings
 
 
+def input_settings(input_name, timeout=3):
+    """The settings an input currently runs with ({} when it does not exist).
+    Lets a fresh process learn a browser source's url and size instead of
+    rewriting them — a rewrite recreates the page."""
+    try:
+        return dict(request('GetInputSettings', {'inputName': input_name},
+                            timeout=timeout).get('inputSettings') or {})
+    except ObsRejected:
+        return {}
+
+
 def place_item(scene_name, item_id, rect, timeout=3):
     """Position/size one tile. Bounds (not scale) so the source fills its cell
     regardless of the camera's own resolution."""
@@ -581,7 +592,7 @@ def place_item(scene_name, item_id, rect, timeout=3):
 # Featuring a player reflows the whole grid. Snapping every tile to its new box
 # in one frame reads as a glitch; easing them across reads as a camera move.
 
-ANIM_FPS = 30                 # frames a second the ease is sampled at
+ANIM_FPS = 60                 # frames a second the ease is sampled at (the canvas is 60)
 _anim_lock = threading.Lock()
 _anim_gen = {}      # scene_name -> generation; see animate_items
 
@@ -630,12 +641,18 @@ def animate_items(scene_name, moves, duration_s=0.7, steps=None):
         gen = _anim_gen[scene_name]
 
     def run():
-        delay = duration_s / steps
+        # Frames are scheduled against the clock, not chained sleeps: a late
+        # frame (OBS busy, a slow sleep) no longer pushes every later frame
+        # back, and its position is sampled from the time that actually
+        # passed, so the move keeps its duration instead of stretching.
+        interval = duration_s / steps
+        start = time.monotonic()
         for step in range(1, steps + 1):
             with _anim_lock:
                 if gen != _anim_gen.get(scene_name):
                     return              # a newer move owns this scene's items
-            t = _ease(step / steps)
+            now = time.monotonic()
+            t = 1.0 if step == steps else _ease(min(1.0, max((now - start) / duration_s, step / steps * 0.5)))
             reqs = [{'requestType': 'SetSceneItemTransform',
                      'requestData': {
                          'sceneName': scene_name, 'sceneItemId': item_id,
@@ -656,7 +673,9 @@ def animate_items(scene_name, moves, duration_s=0.7, steps=None):
                 log.exception('party tile animation failed')
                 return
             if step < steps:
-                time.sleep(delay)
+                wait = start + step * interval - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
 
     t = threading.Thread(target=run, name='obs-tile-anim', daemon=True)
     t.start()
@@ -819,6 +838,12 @@ def set_input_mute(source_name, muted, timeout=3):
     """Mute/unmute one source in the OBS mixer."""
     request('SetInputMute', {'inputName': source_name,
                              'inputMuted': bool(muted)}, timeout=timeout)
+
+
+def set_input_volume(source_name, db, timeout=3):
+    """Set one source's fader in the OBS mixer, in dB (0 = unity)."""
+    request('SetInputVolume', {'inputName': source_name,
+                               'inputVolumeDb': float(db)}, timeout=timeout)
 
 
 def set_audio_monitor(source_name, monitor_type, timeout=3):

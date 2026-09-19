@@ -56,7 +56,10 @@ red = in Program. Shot keys are the existing cut targets (`party`, `map`, `pre`,
   off when the last console subscription ends (grace 10 s) and never leaves it on across a restart.
 - Arm = `SetCurrentPreviewScene`. Take = `TriggerStudioModeTransition` after setting the Broadcast
   page's saved transition and duration (`SetCurrentSceneTransition`, `SetCurrentSceneTransitionDuration`).
-  Take with nothing armed is a no-op with a toast. The map view button posts an empty body to the
+  Take with nothing armed is a no-op with a toast. **Changed 2026-09-19 (Eric): the console has a
+  transition type + length picker again, beside TAKE on both consoles; it writes the same saved
+  `obs_transition` / `obs_transition_ms` the Broadcast page uses (`POST …/api/transition`, remote
+  command `transition`), so every Take and the Broadcast page agree.** The map view button posts an empty body to the
   Broadcast page's `/ttrpg/obs/api/map-mode`, which steps auto → 2D → 3D and releases a pinned character.
 - Existing direct switches keep working unchanged: auto-cam, scene-linked cuts, Broadcast page
   cuts, `switch_scene` callers. They change Program directly (`SetCurrentProgramScene` is legal in

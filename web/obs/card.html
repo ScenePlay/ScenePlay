@@ -241,7 +241,7 @@ function build(d) {
   } else {
     const ph = document.createElement('div');
     ph.className = 'portrait placeholder' + (d.is_dm ? ' dm' : '');
-    ph.textContent = d.is_dm ? ((d.theme && d.theme.dm_icon) || '⚔') : '⚔';
+    ph.textContent = d.icon || (d.is_dm ? ((d.theme && d.theme.dm_icon) || '⚔') : '⚔');
     slot.appendChild(ph);
   }
   const stats = document.getElementById('pc-stats');

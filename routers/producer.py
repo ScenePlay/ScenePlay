@@ -9,6 +9,7 @@ integration keeps switching Program directly, which Studio Mode allows.
 """
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -32,7 +33,7 @@ STUDIO_OFF_GRACE_S = 10      # reconnect window before Studio Mode is dropped
 SWEEP_S = 15                 # self-re-arming reap interval while any console is open
 PAUSE_KEY = 'obs_auto_cam_paused_by_producer'
 SPECIALS_FRONT = ('party', 'map')
-SPECIALS_BACK = ('pre', 'intermission', 'post')
+SPECIALS_BACK = ('pre', 'intermission', 'post', 'black')
 CLOCK_STALE_S = 6 * 3600     # a session clock older than this is last night's
 SHOTS_TTL_S = 2.0            # shots() hits the DB; the console asks constantly
 STATE_MARKERS = 30           # the state document carries the tail; GET /markers has them all
@@ -66,6 +67,43 @@ def _emit_state():
         pass
 
 
+# ── remote consoles (the portal's producer page, via relay_producer) ─────────
+#
+# Remote consoles count like local ones: while any is open, Studio Mode and
+# the meter subscription stay on. relay_producer owns the number; it drops to
+# zero when the GM socket goes down.
+
+_remote = {'consoles': 0}
+
+
+def set_remote_consoles(n):
+    """Called by relay_producer on every presence change from the portal."""
+    n = max(0, int(n or 0))
+    before = _remote['consoles']
+    _remote['consoles'] = n
+    if before == 0 and n > 0:
+        global _off_timer
+        with _lock:
+            if _off_timer is not None:
+                _off_timer.cancel()
+                _off_timer = None
+            local = len(_consoles)
+        if local == 0:
+            _studio(True)
+            started = appsettingGet('producer_clock_start' + _sfx(), '') or ''
+            age = _secs_since(started)
+            if age is None or age > CLOCK_STALE_S:
+                appsettingSet('producer_clock_start' + _sfx(), _now())
+    elif before > 0 and n == 0:
+        if console_count() == 0:
+            _schedule_off()
+    _emit_state()
+
+
+def remote_console_count():
+    return _remote['consoles']
+
+
 # ── console registry ─────────────────────────────────────────────────────────
 #
 # _consoles, _off_timer and _sweep_timer are all guarded by _lock. The lock is
@@ -86,6 +124,7 @@ def console_count():
     with _lock:
         stale = _reap_locked(now)
         n = len(_consoles)
+    n += _remote['consoles']
     if stale and n == 0:
         _schedule_off()
     return n
@@ -116,7 +155,7 @@ def _off_if_idle():
     with _lock:
         _off_timer = None
         _reap_locked(now)
-        idle = not _consoles
+        idle = not _consoles and _remote['consoles'] == 0
     if not idle:
         return
     appsettingSet(PAUSE_KEY, '0')
@@ -291,6 +330,8 @@ def build_closeups():
     off_canvas = {'x': int(w) + 100, 'y': 0, 'w': 320, 'h': 180}
     built, skipped = [], []
     for char in obs._ordered_party():
+        if char.character_id == obs.PRODUCER_TILE_ID:
+            continue                      # no closeup: the producer lives on the grid only
         cam = obs._source_name_for(char)
         if cam not in party_items:
             skipped.append(char.name)
@@ -319,7 +360,8 @@ def build_closeups():
 # Hotkeys mirror the Broadcast page: 1-9 are the tiles in party order (the
 # DM rides along in that order), 0 is the whole party, B the battle map, I the
 # intermission card. Pre/post are click-only.
-SPECIAL_HOTKEYS = {'party': '0', 'map': 'B', 'intermission': 'I'}
+# P = pre-show (intro), O = post-show (outro): letters no other console key uses
+SPECIAL_HOTKEYS = {'party': '0', 'map': 'B', 'intermission': 'I', 'pre': 'P', 'post': 'O', 'black': 'F'}
 
 
 def _build_shots(built):
@@ -333,7 +375,10 @@ def _build_shots(built):
 
     for key in SPECIALS_FRONT:
         special(key)
-    for n, char in enumerate(obs._ordered_party(), start=1):
+    # The producer's tile (last on the grid while barged in) is not a shot:
+    # their presence is the party screen only, so no closeup and no key.
+    party = [c for c in obs._ordered_party() if c.character_id != obs.PRODUCER_TILE_ID]
+    for n, char in enumerate(party, start=1):
         is_dm = char.character_id == obs.DM_TILE_ID
         scene = obs._scene_name_for(char)
         out.append({'key': 'dm' if is_dm else f'char:{char.character_id}',
@@ -434,6 +479,8 @@ def state_doc():
         'armed': _armed['key'],
         'shots': shots(),
         'transitions': [t['name'] for t in snap.get('transitions') or []],
+        'transitions_fixed': [t['name'] for t in snap.get('transitions') or [] if t.get('fixed')],
+        'transition_fixed': _saved_transition(snap)[0] in {t['name'] for t in snap.get('transitions') or [] if t.get('fixed')},
         'transition': _saved_transition(snap)[0],
         'transition_ms': _saved_transition(snap)[1],
         'recording': bool(snap.get('recording')),
@@ -461,6 +508,11 @@ def state_doc():
         'markers': _markers()[-STATE_MARKERS:],
         'consoles': console_count(),
         'session': _session_info(),
+        'producer': producer_info(),
+        # tiles still rendering at a size from an earlier member count: a
+        # reflow never resizes a running camera (that reload is what made
+        # barge-in stutter); Rebuild does, at a break
+        'stale_tiles': obs.stale_render_count(),
     }
 
 
@@ -489,10 +541,13 @@ def api_state(user=Depends(require_dm)):
 
 @router.post('/auto-cam-pause')
 def api_auto_cam_pause(data: dict = Depends(json_body), user=Depends(require_dm)):
-    paused = bool(data.get('paused', True))
+    return set_auto_cam_pause(bool(data.get('paused', True)))
+
+
+def set_auto_cam_pause(paused):
     appsettingSet(PAUSE_KEY, '1' if paused else '0')
     _emit_state()
-    return {'ok': True, 'paused': paused}
+    return {'ok': True, 'paused': bool(paused)}
 
 
 # ── switching ────────────────────────────────────────────────────────────────
@@ -505,7 +560,12 @@ def _obs_error(exc):
 
 @router.post('/arm')
 def api_arm(data: dict = Depends(json_body), user=Depends(require_dm)):
-    key = str(data.get('key', '') or '')
+    return arm(str(data.get('key', '') or ''))
+
+
+def arm(key):
+    """Put a shot in Preview (empty key: forget the armed shot). Shared by
+    the local console endpoint and remote producer commands."""
     if not key:
         # Escape on the console: forget what was armed WITHOUT touching OBS's
         # preview — the operator is clearing their own intent, not the shot
@@ -516,6 +576,16 @@ def api_arm(data: dict = Depends(json_body), user=Depends(require_dm)):
     s = shot(key)
     if not s:
         raise ApiError(400, f'Unknown shot {key!r}', code='bad_shot')
+    if not s['built'] and key == 'black' and obs_ws.connected():
+        # The blank screen is an empty scene: make it on the spot rather than
+        # sending the producer to the Broadcast page for nothing.
+        try:
+            obs_ws.ensure_scene(s['scene'])
+            obs_ws.scene_list(refresh=True)
+        except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+            return {'ok': False, 'error': _obs_error(exc)}
+        _invalidate_shots()
+        s = shot(key) or s
     if not s['built']:
         return {'ok': False, 'error': f"{s['label']}: scene not built yet — run Build on the Broadcast page."}
     if not obs_ws.connected():
@@ -591,12 +661,55 @@ def _ms(data, default=None):
         return default
 
 
+TRANSITION_MS_MAX = 10000
+
+
+def set_transition_pref(name, ms):
+    """The Take fade, chosen on either console and SAVED: the same
+    obs_transition / obs_transition_ms the Broadcast page writes, so every
+    Take, the Broadcast page and the scene-link cuts agree. Reverses the
+    2026-09-15 'no picker' decision (Eric, 2026-09-19)."""
+    name = re.sub(r'[\x00-\x1f]', '', str(name or '')).strip()[:64]
+    snap = obs_ws.current_state()
+    known = {t['name']: bool(t.get('fixed')) for t in snap.get('transitions') or []}
+    if not name:
+        raise ApiError(400, 'transition name required', code='bad_request')
+    if known and name not in known:
+        raise ApiError(400, f'OBS has no transition named {name!r}', code='bad_request')
+    try:
+        ms = int(ms if ms is not None else 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, 'ms must be an integer', code='bad_request')
+    ms = max(0, min(TRANSITION_MS_MAX, ms))
+    fixed = bool(known.get(name))
+    appsettingSet('obs_transition', name)
+    if fixed:
+        # Cut takes no duration: keep the saved fade length untouched so
+        # switching back to Fade brings the last length with it (Eric, 2026-09-19).
+        ms = _saved_transition(snap)[1]
+    else:
+        appsettingSet('obs_transition_ms', str(ms))
+    _emit_state()
+    return {'ok': True, 'transition': name, 'transition_ms': ms, 'fixed': fixed}
+
+
+@router.post('/transition')
+def api_transition(data: dict = Depends(json_body), user=Depends(require_dm)):
+    return set_transition_pref(data.get('name'), data.get('ms'))
+
+
 @router.post('/take')
 def api_take(data: dict = Depends(json_body), user=Depends(require_dm)):
     """Preview -> Program with the Broadcast page's saved transition and
     duration (else OBS's current one). The console sends an empty body: the
     fade is set once, on the Broadcast page, and every Take uses it. A body
     may still name a transition and ms (remotes, scripts)."""
+    return take(data)
+
+
+def take(data=None):
+    """Preview -> Program with the saved transition (a body may override)."""
+    data = data or {}
     default_name, default_ms = _saved_transition()
     name = (str(data.get('transition') or '')).strip() or default_name or None
     return _take(name, _ms(data, default_ms))
@@ -624,7 +737,10 @@ def api_spotlight(data: dict = Depends(json_body), user=Depends(require_dm)):
     Program is left alone: set it while a closeup or the map is up and the
     party scene is already arranged when you cut back to it (the Broadcast
     page's own buttons, by contrast, cut to the party scene as they go)."""
-    key = str(data.get('key', '') or '')
+    return spotlight(str(data.get('key', '') or ''))
+
+
+def spotlight(key):
     if key:
         s = shot(key)
         if not s or s['kind'] == 'special':
@@ -659,6 +775,67 @@ def api_build_closeups(user=Depends(require_dm)):
     return {'ok': True, **result}
 
 
+# ── the producer on the stream (camera link, barge-in, name) ─────────────────
+#
+# Spec: docs/superpowers/specs/2026-09-18-producer-camera-and-barge-design.md.
+# The producer's camera link joins the table's VDO.ninja room (their live
+# link: every mic, camera and the music). Barging in puts their tile LAST on
+# the party grid; leaving removes it, and with it their sound from the stream.
+
+def producer_info():
+    tile = obs.producer_tile()
+    return {'tile_id': obs.PRODUCER_TILE_ID, 'on_screen': obs.producer_on_screen(),
+            'name': tile.name, 'icon': obs.producer_icon(), 'icons': list(obs.PRODUCER_ICONS),
+            'push_url': tile.video_push_url(),
+            'feed': obs._feed_state(tile, obs._presence())}
+
+
+def set_barge(on):
+    on = bool(on)
+    appsettingSet('obs_producer_on_screen', '1' if on else '0')
+    tile = obs.producer_tile()                # mints the link on first use
+    warnings = []
+    if obs_ws.connected():
+        try:
+            if on:
+                # Source first, parked off-canvas, then the reflow: the browser
+                # source's start-up must not land on top of the animation.
+                warnings.extend(obs.stage_tile(tile))
+            res = obs._sync_party_scene(featured_id=obs.featured_id())
+            warnings = list((res or {}).get('warnings') or [])
+            obs.refresh_tiles()
+        except (obs_ws.ObsUnavailable, obs_ws.ObsRejected) as exc:
+            warnings.append(_obs_error(exc))
+    _invalidate_shots()
+    obs._emit('build')
+    _emit_state()
+    return {'ok': True, 'on_screen': on, 'warnings': warnings}
+
+
+def set_profile(name, icon=None):
+    name = re.sub(r'[\x00-\x1f]', '', str(name or '')).strip()[:60]
+    appsettingSet('obs_producer_name', name)
+    if icon is not None:
+        icon = str(icon).strip()
+        appsettingSet('obs_producer_icon', icon if icon in obs.PRODUCER_ICONS else '')
+    # The tile's name strip and card poll their state, so the new name lands
+    # on the next poll; a re-layout is only needed for the scene name itself.
+    _invalidate_shots()
+    obs._emit('build')
+    _emit_state()
+    return {'ok': True, 'name': obs.producer_name(), 'icon': obs.producer_icon()}
+
+
+@router.post('/barge')
+def api_barge(data: dict = Depends(json_body), user=Depends(require_dm)):
+    return set_barge(data.get('on', True))
+
+
+@router.post('/profile')
+def api_profile(data: dict = Depends(json_body), user=Depends(require_dm)):
+    return set_profile(data.get('name', ''), data.get('icon'))
+
+
 # ── clocks and markers ───────────────────────────────────────────────────────
 
 MARKERS_MAX = 200
@@ -668,6 +845,10 @@ MARKERS_MAX = 200
 def api_countdown(data: dict = Depends(json_body), user=Depends(require_dm)):
     """{'seconds': n} counts down from now; {'until': 'YYYY-MM-DD HH:MM:SS'}
     sets an absolute end; {'clear': true} removes it."""
+    return set_countdown(data)
+
+
+def set_countdown(data):
     from datetime import timedelta
     key = 'producer_countdown_until' + _sfx()
     if data.get('clear'):
@@ -698,6 +879,10 @@ def api_countdown(data: dict = Depends(json_body), user=Depends(require_dm)):
 
 @router.post('/clock/reset')
 def api_clock_reset(user=Depends(require_dm)):
+    return clock_reset()
+
+
+def clock_reset():
     now = _now()
     appsettingSet('producer_clock_start' + _sfx(), now)
     _emit_state()
@@ -712,7 +897,11 @@ def _save_markers(rows):
 def api_marker(data: dict = Depends(json_body), user=Depends(require_dm)):
     """Stamp the moment: a chapter in the recording when one is running, and
     always a row in the session's marker list (for the edit later)."""
-    note = (str(data.get('note', '') or '')).strip()[:200] or 'Marker'
+    return add_marker(data.get('note', ''))
+
+
+def add_marker(note):
+    note = (str(note or '')).strip()[:200] or 'Marker'
     snap = obs_ws.current_state()
     recording = bool(snap.get('recording'))
     marker = {'at': _now(), 'timecode': snap.get('record_timecode', '') if recording else '',
@@ -742,6 +931,10 @@ def api_markers(user=Depends(require_dm)):
 
 @router.delete('/markers')
 def api_markers_clear(user=Depends(require_dm)):
+    return clear_markers()
+
+
+def clear_markers():
     with _markers_lock:
         _save_markers([])
     _emit_state()

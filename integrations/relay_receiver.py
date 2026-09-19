@@ -326,6 +326,17 @@ def _poll():
         except Exception as exc:
             log.warning('Mutation ack failed: %s', exc)
 
+    # Remote producer commands staged while the GM socket was down ride the
+    # same snapshot; the executor dedups and expires them itself.
+    pending_cmds = payload.get('pending_producer_commands') or []
+    if pending_cmds:
+        try:
+            import integrations.relay_producer as rp
+            for row in pending_cmds:
+                rp.enqueue(row)
+        except Exception as exc:
+            log.warning('producer command replay failed: %s', exc)
+
     note_sync_ok()
 
 

@@ -26,7 +26,7 @@ def _room_videobitrate():
     return max(ROOM_BITRATE_MIN, min(v, ROOM_BITRATE_MAX))
 
 
-def _vdo_url(kind, stream_id):
+def _vdo_url(kind, stream_id, producer=False):
     """Build a VDO.ninja push/view URL for one stream id.
 
     The shared table password (obs_vdo_password) rides on BOTH ends: the
@@ -86,7 +86,9 @@ def _vdo_url(kind, stream_id):
             # &maxvideobitrate is the sender-side hard ceiling per outbound
             # encode (per docs; &outboundvideobitrate is only a default that
             # viewers may override), so no single link can run away.
-            if (appsettingGet('obs_room_audio_only', '1') or '1') == '1':
+            # The producer is the exception: switching the show, they need
+            # the faces, and they sit on a laptop with bandwidth to spare.
+            if not producer and (appsettingGet('obs_room_audio_only', '1') or '1') == '1':
                 url += '&novideo'
             url += f'&maxvideobitrate={_room_videobitrate()}'
     password = (appsettingGet('obs_vdo_password', '') or '').strip()

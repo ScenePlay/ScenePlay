@@ -161,6 +161,8 @@ class TestStartIdempotent:
         monkeypatch.setattr(rw, '_thread', None)
         rw.start(app=object())
         rw.start(app=object())
-        assert len(started) == 1
+        # relay_producer starts its own (idle) threads from here too; only
+        # the socket manager's thread is under test
+        assert len([t for t in started if t.get('name') == 'relay-gm-ws']) == 1
         rw._stop.set()
         monkeypatch.setattr(rw, '_thread', None)

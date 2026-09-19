@@ -633,3 +633,136 @@ class TestCardOverrideAll:
         assert _cards_state({7}, party) == 'some'
         assert _cards_state({7, 8, 42}, party) == 'all'
         assert _cards_state({42}, []) == 'none'
+
+
+class TestVolumeApi:
+    """The producer console's faders: one OBS input volume per tile and one
+    for the music, persisted like the mutes so a rebuild cannot silently reset
+    the mix."""
+
+    def _post(self, a, dm, payload):
+        with a.test_client(user=dm) as c:
+            return c.post('/ttrpg/obs/api/volume', json=payload)
+
+    def _kara(self):
+        from models.ttrpg import tblCharacters
+        db.session.add(tblCharacters(
+            character_id=7, user_id=1, name='Kara', level=1, hp_current=1,
+            hp_max=1, created_at='2026-01-01 00:00:00'))
+        db.session.commit()
+
+    def test_a_players_fader_persists_and_reaches_obs(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        pushed = []
+        monkeypatch.setattr(obs_ws, 'connected', lambda: True)
+        monkeypatch.setattr(obs_ws, 'set_input_volume',
+                            lambda n, db_, **k: pushed.append((n, db_)))
+        self._kara()
+        d = self._post(a, dm, {'character_id': 7, 'db': -6}).get_json()
+        assert d == {'ok': True, 'db': -6.0, 'applied_later': False}
+        assert store['obs_volume_db:7'] == '-6.0'
+        assert pushed == [('Player - Kara Cam', -6.0)]
+
+    def test_out_of_range_values_are_clamped(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        import routers.obs as ro
+        monkeypatch.setattr(obs_ws, 'connected', lambda: False)
+        self._kara()
+        assert self._post(a, dm, {'character_id': 7, 'db': 40}).get_json()['db'] == ro.VOLUME_DB_MAX
+        assert self._post(a, dm, {'character_id': 7, 'db': -80}).get_json()['db'] == ro.VOLUME_DB_MIN
+        r = self._post(a, dm, {'character_id': 7, 'db': 'loud'})
+        assert r.status_code == 400
+
+    def test_disconnected_obs_still_persists_the_fader(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        monkeypatch.setattr(obs_ws, 'connected', lambda: False)
+        self._kara()
+        d = self._post(a, dm, {'character_id': 7, 'db': -3}).get_json()
+        assert d['ok'] is True and d['applied_later'] is True
+        assert store['obs_volume_db:7'] == '-3.0'
+
+    def test_the_music_fader_covers_both_music_inputs(self, dm_app, monkeypatch):
+        """The music bed is captured under one of two names depending on how
+        the scene was built; the fader is pushed at both and a missing one is
+        not an error."""
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        import routers.obs as ro
+        pushed = []
+
+        def push(n, db_, **k):
+            if n == ro.MUSIC_FEED_SOURCE_NAME:
+                raise obs_ws.ObsRejected(600, 'no such input')
+            pushed.append((n, db_))
+        monkeypatch.setattr(obs_ws, 'connected', lambda: True)
+        monkeypatch.setattr(obs_ws, 'set_input_volume', push)
+        d = self._post(a, dm, {'target': 'music', 'db': 2.5}).get_json()
+        assert d == {'ok': True, 'db': 2.5, 'applied_later': False}
+        assert store['obs_volume_db:music'] == '2.5'
+        assert pushed == [(ro.MUSIC_SOURCE_NAME, 2.5)]
+
+    def test_unknown_target_is_refused(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        assert self._post(a, dm, {'db': 0}).status_code == 400
+        assert self._post(a, dm, {'character_id': 999, 'db': 0}).status_code == 404
+
+    def test_state_rows_carry_the_faders(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        import routers.obs as ro
+        from models.ttrpg import tblCharacters
+        kara = tblCharacters(character_id=7, user_id=1, name='Kara', level=1,
+                             hp_current=1, hp_max=1, created_at='2026-01-01 00:00:00')
+        monkeypatch.setattr(ro, '_ordered_party', lambda *a_, **k: [kara])
+        store['obs_volume_db:7'] = '-6.0'
+        store['obs_volume_db:music'] = '1.5'
+        with a.test_client(user=dm) as c:
+            d = c.get('/ttrpg/obs/api/state').get_json()
+        assert d['rows'][0]['volume_db'] == -6.0
+        assert d['music_volume_db'] == 1.5
+        store.clear()
+        with a.test_client(user=dm) as c:
+            d = c.get('/ttrpg/obs/api/state').get_json()
+        assert d['rows'][0]['volume_db'] == 0.0 and d['music_volume_db'] == 0.0
+
+    def test_a_build_reasserts_the_saved_fader(self, dm_app, monkeypatch):
+        """Like the mute: the setting is the truth, OBS is told again on every
+        build, and with nothing saved the fader goes back to 0 dB so the
+        console and the OBS mixer always show the same number."""
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        import routers.obs as ro
+        from models.ttrpg import tblCharacters
+        kara = tblCharacters(character_id=7, user_id=1, name='Kara', level=1,
+                             hp_current=1, hp_max=1, created_at='2026-01-01 00:00:00')
+        pushed = []
+        monkeypatch.setattr(obs_ws, 'set_input_mute', lambda n, m, **k: None)
+        monkeypatch.setattr(obs_ws, 'set_audio_monitor', lambda n, t, **k: None)
+        monkeypatch.setattr(obs_ws, 'set_input_volume',
+                            lambda n, db_, **k: pushed.append((n, db_)))
+        store['obs_volume_db:7'] = '-6.0'
+        warnings = []
+        ro._apply_tile_audio('Player - Kara Cam', kara, warnings)
+        assert pushed == [('Player - Kara Cam', -6.0)] and warnings == []
+        pushed.clear(); store.clear()
+        ro._apply_tile_audio('Player - Kara Cam', kara, warnings)
+        assert pushed == [('Player - Kara Cam', 0.0)]
+
+    def test_a_refused_fader_on_build_is_a_warning_not_a_failure(self, dm_app, monkeypatch):
+        a, dm, store, _tmp = dm_app
+        import integrations.obs_ws as obs_ws
+        import routers.obs as ro
+        from models.ttrpg import tblCharacters
+        kara = tblCharacters(character_id=7, user_id=1, name='Kara', level=1,
+                             hp_current=1, hp_max=1, created_at='2026-01-01 00:00:00')
+
+        def refuse(n, db_, **k):
+            raise obs_ws.ObsRejected(600, 'nope')
+        monkeypatch.setattr(obs_ws, 'set_input_mute', lambda n, m, **k: None)
+        monkeypatch.setattr(obs_ws, 'set_audio_monitor', lambda n, t, **k: None)
+        monkeypatch.setattr(obs_ws, 'set_input_volume', refuse)
+        warnings = []
+        ro._apply_tile_audio('Player - Kara Cam', kara, warnings)
+        assert len(warnings) == 1 and 'Kara' in warnings[0]

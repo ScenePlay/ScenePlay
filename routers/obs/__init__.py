@@ -227,7 +227,8 @@ def _obs_cfg():
 # flowing through the same layout, rotation, fallback and card code unchanged.
 
 DM_TILE_ID = -1
-_MANAGED_PREFIXES = ('Player - ', 'DM - ')
+PRODUCER_TILE_ID = -2        # the producer's party tile, while barged in
+_MANAGED_PREFIXES = ('Player - ', 'DM - ', 'Producer - ')   # tiles ScenePlay owns (pruned when they leave)
 # Order matters: the no-argument /api/map-mode call steps through this list, so
 # this is the order the sidebar button and the V hotkey cycle in.
 MAP_MODES = ('auto', '2d', '3d')
@@ -279,6 +280,71 @@ class _DmTile:
 
     def hp_pct(self):
         return 0
+
+
+class _ProducerTile:
+    """Character-shaped stand-in for the producer (spec: docs/superpowers/specs/
+    2026-09-18-producer-camera-and-barge-design.md). Identity lives in settings
+    like the DM's; the tile exists on the grid only while barged in."""
+    character_id = PRODUCER_TILE_ID
+    portrait_path = ''
+    hp_current = 0
+    hp_max = 0
+    ac = 0
+    conditions = ()
+    video_feed_url = ''
+
+    def __init__(self, name):
+        self.name = name
+        self.video_stream_id = (appsettingGet('obs_producer_stream_id', '') or '').strip()
+
+    def has_feed(self):
+        return bool(self.video_stream_id)
+
+    def video_view_url(self):
+        from models.ttrpg import _vdo_url
+        return _vdo_url('view', self.video_stream_id) if self.video_stream_id else ''
+
+    def video_push_url(self):
+        """The producer's camera link: the table's room WITH video, so they
+        see the faces they are cutting between."""
+        from models.ttrpg import _vdo_url
+        return _vdo_url('push', self.video_stream_id, producer=True) if self.video_stream_id else ''
+
+
+# The symbols a producer may pick for their on-stream identity (name strip
+# and card). A fixed list, chosen from a dropdown: never free text on stream.
+PRODUCER_ICONS = ['', '🎬', '🎥', '🎙️', '🎧', '🎛️', '📺', '⭐', '🎲', '🐉', '🛡️', '⚔️', '🧙', '🃏', '🔥', '👑']
+
+
+def producer_icon():
+    icon = (appsettingGet('obs_producer_icon', '') or '').strip()
+    return icon if icon in PRODUCER_ICONS else ''
+
+
+def producer_name():
+    return (appsettingGet('obs_producer_name', '') or '').strip()[:60] or 'Producer'
+
+
+def producer_on_screen():
+    return (appsettingGet('obs_producer_on_screen', '0') or '0') == '1'
+
+
+def producer_tile():
+    """Mints the stream id on first use so the link always exists."""
+    if not appsettingGet('obs_producer_stream_id', ''):
+        appsettingSet('obs_producer_stream_id', _new_stream_id())
+    return _ProducerTile(producer_name())
+
+
+def _tile_for_id(cid):
+    """The DM and producer tiles are settings-backed stand-ins with negative
+    ids; everyone else is a character row."""
+    if cid == DM_TILE_ID:
+        return dm_tile()
+    if cid == PRODUCER_TILE_ID:
+        return producer_tile()
+    return db.session.get(tblCharacters, cid)
 
 
 def dm_tile_enabled():
@@ -384,6 +450,7 @@ def _mapping_rows(party, snap):
             'has_custom_url': bool(char.video_feed_url),
             'show_card': char.character_id in overrides,
             'muted': char.character_id in muted_ids,
+            'volume_db': _volume_db(char.character_id),
             'showing': 'card' if _tile_url(char, presence, overrides).startswith(
                 _card_base()) else 'camera',
             'pos': order.index(char.character_id) + 1 if char.character_id in order else 0,
@@ -1621,6 +1688,7 @@ def api_state(user=Depends(require_dm)):
         'rows': _mapping_rows(_ordered_party(include_offstage=True), snap),
         'group_scene': _special_scene('group'),
         'last_error': appsettingGet('obs_last_error', ''),
+        'music_volume_db': _volume_db('music'),
     }
 
 
@@ -1932,6 +2000,9 @@ CUT_TARGETS = {
     'intermission': ('intermission', 'intermission card'),
     'post':         ('post',         'post-show card'),
     'party':        ('group',        'party scene'),
+    # An empty scene: the producer's blank screen (F). Silent by construction —
+    # _build_audio never nests the party into it.
+    'black':        ('black',        'blank screen'),
 }
 
 
@@ -1943,7 +2014,8 @@ def _cut_scene_name(key):
         return scene
     return {'map': map_scene_name, 'pre': pre_scene_name,
             'intermission': intermission_scene_name,
-            'post': post_scene_name, 'party': party_scene_name}[key]()
+            'post': post_scene_name, 'party': party_scene_name,
+            'black': black_scene_name}[key]()
 
 
 @router.post('/api/mute')
@@ -1971,8 +2043,7 @@ def api_mute(data: dict = Depends(json_body), user=Depends(require_dm)):
             cid = int(data.get('character_id'))
         except (TypeError, ValueError):
             return JSONResponse({'ok': False, 'error': 'character_id required'}, status_code=400)
-        char = (dm_tile() if cid == DM_TILE_ID
-                else db.session.get(tblCharacters, cid))
+        char = _tile_for_id(cid)
         if char is None:
             return JSONResponse({'ok': False, 'error': 'No such character.'}, status_code=404)
         targets = [char]
@@ -1999,6 +2070,46 @@ def _apply_mutes(targets, muted):
             # setting still wins on the next build.
             failed.append(char.name)
     return failed
+
+
+@router.post('/api/volume')
+def api_volume(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """The producer console's faders: one OBS input volume per tile, one for
+    the music bed.
+
+    {'character_id': id, 'db': n}   — one person's camera source (the DM's
+                                      tile included)
+    {'target': 'music', 'db': n}    — the music, whichever input carries it
+
+    Persisted first, then pushed to OBS, exactly like a mute: builds re-assert
+    every tile's audio, so a fader that lived only in OBS would snap back to
+    unity on the next rebuild."""
+    import integrations.obs_ws as obs_ws
+    try:
+        db_value = _clamp_db(data.get('db'))
+    except (TypeError, ValueError):
+        return JSONResponse({'ok': False, 'error': 'db must be a number'}, status_code=400)
+    if (data.get('target') or '') == 'music':
+        _set_volume_db('music', db_value)
+        applied = _push_music_volume(db_value) if obs_ws.connected() else False
+    else:
+        try:
+            cid = int(data.get('character_id'))
+        except (TypeError, ValueError):
+            return JSONResponse({'ok': False, 'error': 'character_id or target required'}, status_code=400)
+        char = _tile_for_id(cid)
+        if char is None:
+            return JSONResponse({'ok': False, 'error': 'No such character.'}, status_code=404)
+        _set_volume_db(cid, db_value)
+        applied = False
+        if obs_ws.connected():
+            try:
+                obs_ws.set_input_volume(_source_name_for(char), db_value)
+                applied = True
+            except (obs_ws.ObsRejected, obs_ws.ObsUnavailable):
+                pass                    # not built yet; the next build applies it
+    _emit('volume')
+    return {'ok': True, 'db': db_value, 'applied_later': not applied}
 
 
 SCENE_AUDIO_POLICIES = ('', 'mute_players', 'mute_all', 'unmute_all')
@@ -2245,6 +2356,7 @@ def _closeup_rows():
             'character_id': char.character_id,
             'name': char.name,
             'player': ('the DM' if char.character_id == DM_TILE_ID
+                       else 'the producer' if char.character_id == PRODUCER_TILE_ID
                        else player_name_for(char)),
             'feed': _feed_state(char, presence),
             'showing': ('card' if _tile_url(char, presence, overrides)
@@ -2449,6 +2561,13 @@ def pre_scene_name():
 def post_scene_name():
     return ((appsettingGet('obs_post_scene', '') or '').strip()
             or 'ScenePlay Post')
+
+
+def black_scene_name():
+    """The blank screen: an empty scene, so a Take to it shows nothing and
+    carries no sound (see _build_audio)."""
+    return ((appsettingGet('obs_black_scene', '') or '').strip()
+            or 'ScenePlay Black')
 
 
 def intermission_scene_name():
@@ -2898,6 +3017,11 @@ def ensure_show_scenes():
         _place_background(scene, w, h, warnings)
         _upsert_special_map(kind, scene)
         scenes[kind] = scene
+    # The blank screen is just an empty scene: nothing to place, nothing to art.
+    # (Not a card: no strip, no art, and not in the returned dict of card scenes.)
+    black = black_scene_name()
+    obs_ws.ensure_scene(black)
+    _upsert_special_map('black', black)
     obs_ws.scene_list(refresh=True)
     return scenes, warnings
 
@@ -2930,6 +3054,52 @@ def _set_id_flag(setting, character_id, on):
     ids = _id_set(setting)
     ids.add(character_id) if on else ids.discard(character_id)
     appsettingSet(setting, ','.join(str(i) for i in sorted(ids)))
+
+
+# The producer console's faders. OBS itself accepts -100..+26 dB; this range
+# is what a mixing hand actually uses, and keeps a slipped slider from
+# blasting or silencing someone.
+VOLUME_DB_MIN = -30.0
+VOLUME_DB_MAX = 10.0
+
+
+def _clamp_db(value):
+    """A fader value from the wire -> float dB inside the range. ValueError
+    when it is not a number at all."""
+    db = float(value)
+    if db != db:                       # NaN
+        raise ValueError('not a number')
+    return max(VOLUME_DB_MIN, min(VOLUME_DB_MAX, db))
+
+
+def _volume_db(key):
+    """The saved fader for a character id or 'music', in dB; 0 (unity) when
+    nothing was saved. Persisted like the mutes, in settings rather than a
+    column, and re-asserted by every build for the same reason."""
+    raw = (appsettingGet(f'obs_volume_db:{key}', '') or '').strip()
+    try:
+        return _clamp_db(raw) if raw else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _set_volume_db(key, db):
+    appsettingSet(f'obs_volume_db:{key}', str(float(db)))
+
+
+def _push_music_volume(db):
+    """The music bed is captured under one of two input names depending on
+    how the scene was built; push the fader at both and let a missing one
+    pass. False only when OBS itself was unreachable."""
+    import integrations.obs_ws as obs_ws
+    for name in (MUSIC_SOURCE_NAME, MUSIC_FEED_SOURCE_NAME):
+        try:
+            obs_ws.set_input_volume(name, db)
+        except obs_ws.ObsRejected:
+            continue                    # that name is not in this build
+        except obs_ws.ObsUnavailable:
+            return False
+    return True
 
 
 def _muted_ids():
@@ -2982,11 +3152,20 @@ def player_name_for(char):
     return (getattr(u, 'display_name', '') or '').strip()
 
 
+def _tile_leaf(character_id):
+    """Path leaf for the negative-id tiles (<int:> never matches them)."""
+    if character_id == DM_TILE_ID:
+        return 'dm'
+    if character_id == PRODUCER_TILE_ID:
+        return 'producer'
+    return str(character_id)
+
+
 def tile_url(character_id):
     # Same reason card_url does this: Flask's <int:> converter never matches a
     # negative number, so the DM tile (id -1) needs its own leaf. Without it
     # the DM's camera tile was a 404 in OBS.
-    leaf = 'dm' if character_id == DM_TILE_ID else str(character_id)
+    leaf = _tile_leaf(character_id)
     return (f'{_card_base()}{URL_PREFIX}/tile/{leaf}'
             f'?t={_card_token(character_id)}')
 
@@ -3069,8 +3248,9 @@ def api_build_party(user=Depends(require_dm)):
     # ordinary syncs skip writing settings that already match, which would
     # otherwise make a hand-edited source impossible to put back from here.
     _input_settings.clear()
+    _stale_size.clear()
     try:
-        result = _sync_party_scene(featured_id=featured_id())
+        result = _sync_party_scene(featured_id=featured_id(), resize=True)
         map_scene, map_warn = ensure_map_scene()
         result['warnings'].extend(map_warn)
         result['map_scene'] = map_scene
@@ -3112,22 +3292,53 @@ def api_build_party(user=Depends(require_dm)):
 DEFAULT_TILE_ANIM_MS = 700
 
 
-def _ensure_input(scene, source, url, width, height, warnings):
+_stale_size = {}    # source -> (w, h) it should render at, once a Build resizes it
+
+
+def _ensure_input(scene, source, url, width, height, warnings, keep_running=False):
     """ensure_browser_input, but only writing the source's settings when they
     have actually changed.
 
     Writing them re-renders the page even when nothing differs — which blanks a
     live camera for an instant. Doing that to every tile on every spotlight
-    change is the flash across the whole grid."""
+    change is the flash across the whole grid.
+
+    keep_running=True (every reflow; not Build): a page that is already up is
+    NEVER resized. Since OBS 27.2 a width/height-only write resizes the page
+    live (CEF WasResized + a texture rebuild: a blink and a re-layout per
+    tile, no reload — any OTHER setting changing in the same write still
+    recreates the page), and the render size changes whenever the member
+    count crosses a grid boundary (3→4, 6→7, 9→10). Every tile blinking and
+    re-laying out at the moment the grid slides was the choppy barge-in. The source keeps its old
+    size (SCALE_INNER bounds already letterbox tiles inside their cells, so a
+    stale aspect only changes the bars), is remembered in _stale_size, and the
+    next Build resizes it at a moment of the producer's choosing."""
     import integrations.obs_ws as obs_ws
     want = (url, int(width), int(height))
+    have = _input_settings.get(source)
+    if keep_running and have is None:
+        # A fresh process: learn what the running page is before deciding —
+        # rewriting on every restart used to blank the whole grid at boot.
+        cur = obs_ws.input_settings(source)
+        if cur.get('url'):
+            have = (cur.get('url'), int(cur.get('width') or 0), int(cur.get('height') or 0))
+            _input_settings[source] = have
+    rewrite = have != want
+    if keep_running and rewrite and have is not None and have[0] == want[0]:
+        _stale_size[source] = want[1:]
+        rewrite = False
     item_id, warn = obs_ws.ensure_browser_input(
-        scene, source, url, width, height,
-        rewrite_settings=_input_settings.get(source) != want)
+        scene, source, url, width, height, rewrite_settings=rewrite)
     warnings.extend(warn)
-    if item_id is not None:
+    if item_id is not None and rewrite:
         _input_settings[source] = want
+        _stale_size.pop(source, None)
     return item_id
+
+
+def stale_render_count():
+    """Tiles rendering at a size from an earlier member count (see _ensure_input)."""
+    return len(_stale_size)
 
 
 def _apply_tile_audio(source, char, warnings):
@@ -3154,6 +3365,13 @@ def _apply_tile_audio(source, char, warnings):
     except (obs_ws.ObsRejected, obs_ws.ObsUnavailable) as exc:
         warnings.append(f'Could not set the audio for {char.name} ({exc}).')
         return
+    # The fader, third question: the producer console's saved mix. Always
+    # re-asserted (0 dB when nothing is saved) so the console and the OBS
+    # mixer show the same number after a build.
+    try:
+        obs_ws.set_input_volume(source, _volume_db(char.character_id))
+    except (obs_ws.ObsRejected, obs_ws.ObsUnavailable) as exc:
+        warnings.append(f'Could not set the fader for {char.name} ({exc}).')
     try:
         obs_ws.set_audio_monitor(
             source,
@@ -3187,7 +3405,7 @@ def _tile_anim_ms():
         return DEFAULT_TILE_ANIM_MS
 
 
-def _sync_party_scene(featured_id=None):
+def _sync_party_scene(featured_id=None, resize=False):
     """Make OBS match the party: one tile per member, positioned on the grid.
 
     Tile ORDER is the rotation order, so a player's slot is stable for the
@@ -3237,7 +3455,8 @@ def _sync_party_scene(featured_id=None):
         source = _source_name_for(char)
         url, overlay = _tile_plan(char, presence, overrides)
         _tile_urls[char.character_id] = (url, overlay)
-        item_id = _ensure_input(scene, source, url, render_w, render_h, warnings)
+        item_id = _ensure_input(scene, source, url, render_w, render_h, warnings,
+                                keep_running=not resize)
         if item_id is None:
             warnings.append(f'Could not place {char.name} in the scene.')
             continue
@@ -3245,6 +3464,13 @@ def _sync_party_scene(featured_id=None):
         # (or unchanged) is simply put where it belongs.
         target = {k: rect[k] for k in ('x', 'y', 'w', 'h')}
         was = _tile_rects.get(char.character_id)
+        # A tile joining an already-laid-out grid (barge-in, a new member)
+        # blooms from the centre of its cell instead of popping in at full
+        # size beside neighbours that are still sliding. A first layout
+        # (nothing placed yet) still snaps: that is a build, not a change.
+        if anim_ms and was is None and _tile_rects:
+            was = _bloom_start(target)
+            obs_ws.place_item(scene, item_id, was)
         if anim_ms and was and was != target:
             moves.append((item_id, was, target))
         else:
@@ -3267,7 +3493,7 @@ def _sync_party_scene(featured_id=None):
             continue
         overlay_source = _overlay_source_name_for(char)
         s_item = _ensure_input(scene, overlay_source, overlay,
-                               render_w, render_h, warnings)
+                               render_w, render_h, warnings, keep_running=not resize)
         if s_item is None:
             continue
         strips.add(overlay_source)
@@ -3927,9 +4153,12 @@ def _build_audio(canvas_w, canvas_h, warnings):
 
     _drop_legacy_audio_scene(warnings)
 
+    black = black_scene_name()
     for sc in scenes:
         if sc == party:
             continue        # a scene cannot contain itself
+        if sc == black:
+            continue        # the blank screen stays silent as well as dark
         try:
             item = obs_ws.ensure_nested_scene(sc, party)
             if item is not None:
@@ -3985,6 +4214,10 @@ def _place_music(party, transport, canvas_w, warnings):
                 obs_ws.set_item_enabled(party, item, True)
         except (obs_ws.ObsRejected, obs_ws.ObsUnavailable) as exc:
             warnings.append(f'Could not add the music feed ({exc}).')
+    if transport in ('device', 'feed'):
+        # The console's music fader, re-asserted like the tiles' — best
+        # effort, the input may just have failed to build above.
+        _push_music_volume(_volume_db('music'))
 
 
 def _drop_legacy_audio_scene(warnings):
@@ -4103,6 +4336,59 @@ def _warn_if_music_doubled(warnings):
         return
 
 
+def _bloom_start(target):
+    """Where a newly added tile starts its ease-in: a dot at its cell's centre."""
+    return {'x': target['x'] + target['w'] / 2.0, 'y': target['y'] + target['h'] / 2.0,
+            'w': 1.0, 'h': 1.0}
+
+
+BARGE_SETTLE_S = 0.8     # Chromium start-up for a new tile, before the grid moves
+
+
+def stage_tile(char, settle_s=None):
+    """Create a member's browser source(s) BEFORE the grid reflows, parked
+    off-canvas, and give Chromium a moment to start. Creating the source
+    during the animation is what made barge-in stutter: the page load and
+    WebRTC set-up landed on OBS while every other tile was mid-slide.
+    _sync_party_scene then finds the items already there and eases them in."""
+    import time as _time
+    import integrations.obs_ws as obs_ws
+    if not obs_ws.connected():
+        return []
+    warnings = []
+    scene = party_scene_name()
+    obs_ws.ensure_scene(scene)
+    snap = obs_ws.current_state()
+    canvas_w = snap.get('base_width') or 1920
+    canvas_h = snap.get('base_height') or 1080
+    try:
+        gutter = int(appsettingGet('obs_tile_gutter', '') or obs_layout.DEFAULT_GUTTER)
+    except (TypeError, ValueError):
+        gutter = obs_layout.DEFAULT_GUTTER
+    areas = _frame_areas(canvas_w, canvas_h)
+    members = _ordered_party()
+    render_w, render_h = obs_layout.spotlight_tile_size(
+        len(members), canvas_w, canvas_h, gutter, areas['tiles'])
+    off = {'x': float(canvas_w) + 100.0, 'y': 0.0, 'w': float(render_w), 'h': float(render_h)}
+    url, overlay = _tile_plan(char)
+    for source, src_url in ((_source_name_for(char), url),
+                            (_overlay_source_name_for(char), overlay)):
+        if not src_url:
+            continue
+        item_id = _ensure_input(scene, source, src_url, render_w, render_h, warnings)
+        if item_id is None:
+            continue
+        try:
+            obs_ws.place_item(scene, item_id, off)
+            obs_ws.set_item_enabled(scene, item_id, True)
+        except (obs_ws.ObsRejected, obs_ws.ObsUnavailable) as exc:
+            warnings.append(f'Could not park {source} ({exc}).')
+    settle = BARGE_SETTLE_S if settle_s is None else settle_s
+    if settle > 0:
+        _time.sleep(settle)
+    return warnings
+
+
 def _prune_party_scene(scene, keep_sources, warnings):
     """Drop tiles for players who left the party, so an old member's camera
     doesn't linger on stream."""
@@ -4155,12 +4441,17 @@ def _ordered_party(include_offstage=False):
     if dm is not None:
         ordered.insert(0, dm)
     ordered.extend(rest)
+    # The producer barges in at the END of the grid, never reordered: a
+    # segment guest, not a seat at the table (spec 2026-09-18 producer camera).
+    if producer_on_screen():
+        ordered.append(producer_tile())
     return ordered
 
 
 def _scene_name_for(char):
     clean = re.sub(r'[\x00-\x1f]', '', char.name or '').strip() or f'Player {char.character_id}'
-    prefix = 'DM - ' if char.character_id == DM_TILE_ID else 'Player - '
+    prefix = ('DM - ' if char.character_id == DM_TILE_ID
+              else 'Producer - ' if char.character_id == PRODUCER_TILE_ID else 'Player - ')
     return f'{prefix}{clean}'[:200]
 
 
@@ -4480,7 +4771,7 @@ def card_url(character_id, over=False):
     still running underneath it, so the player stays audible."""
     # Flask's <int:> converter never matches a negative number, so the DM's
     # card gets its own path rather than /card/-1.
-    leaf = 'dm' if character_id == DM_TILE_ID else str(character_id)
+    leaf = _tile_leaf(character_id)
     return (f'{_card_base()}{URL_PREFIX}/card/{leaf}'
             f'?t={_card_token(character_id)}' + ('&over=1' if over else ''))
 
@@ -4514,6 +4805,35 @@ def dm_tile_view(t: str = '', strip: str = ''):
     reason /card/dm is: <int:> will not match the DM's negative id."""
     token = t
     if not token_ok(token, _card_token(DM_TILE_ID)):
+        raise ApiError(403, 'forbidden', code='forbidden')
+    return _overlay('tile.html')
+
+
+@router.get('/card/producer')
+def producer_card(t: str = '', over: str = ''):
+    """The producer's tile when their camera is not showing (same gate as the DM's)."""
+    if not token_ok(t, _card_token(PRODUCER_TILE_ID)):
+        raise ApiError(403, 'forbidden', code='forbidden')
+    return _overlay('card.html')
+
+
+@router.get('/card/producer/state')
+def producer_card_state(t: str = ''):
+    if not token_ok(t, _card_token(PRODUCER_TILE_ID)):
+        raise ApiError(403, 'forbidden', code='forbidden')
+    tile = producer_tile()
+    icon = producer_icon()
+    return {'name': f'{icon} {tile.name}'.strip(), 'icon': icon, 'hp_current': 0, 'hp_max': 0,
+            'hp_pct': 0, 'ac': 0, 'conditions': [],
+            'player': 'Producer', 'is_dm': False,
+            'theme': _theme_payload(),
+            'portrait_url': '', 'feed_url': tile.video_view_url(),
+            'poll_s': card_poll_s()}
+
+
+@router.get('/tile/producer')
+def producer_tile_view(t: str = '', strip: str = ''):
+    if not token_ok(t, _card_token(PRODUCER_TILE_ID)):
         raise ApiError(403, 'forbidden', code='forbidden')
     return _overlay('tile.html')
 
@@ -4855,6 +5175,8 @@ def panel_state(t: str = ''):
             turn = ch.name
     elif fid == DM_TILE_ID:
         turn = dm_tile().name
+    elif fid == PRODUCER_TILE_ID:
+        turn = producer_name()
 
     lines = _info_lines()
     return {

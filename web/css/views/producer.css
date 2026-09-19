@@ -22,14 +22,16 @@ body.producer .container, body.producer .container-fluid { max-width: none; }
 .pc-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
 .pc-shot .pc-shot-label { display: block; padding: .2rem .4rem; font-size: .8rem; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
-.pc-shot .pc-key { position: absolute; left: .3rem; top: .25rem; font-size: .7rem; background: rgba(0,0,0,.65);
-  padding: 0 .35rem; border-radius: 3px; }
+.pc-shot .pc-key { position: absolute; left: .3rem; top: .25rem; font-size: 1.4rem; line-height: 1.2; font-weight: 700; background: rgba(0,0,0,.65);
+  padding: 0 .4rem; border-radius: 3px; }
 .pc-shot.armed { border-color: #2e8b57; } .pc-shot.live { border-color: #c0392b; }
 .pc-shot.unbuilt { opacity: .45; cursor: not-allowed; }
 .pc-take { font-size: 1.2rem; font-weight: 700; min-width: 8rem; }
 .pc-meter { height: .45rem; background: #222; border-radius: 3px; overflow: hidden; }
 .pc-meter > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2e8b57 70%, #c9a227 85%, #c0392b); }
 .pc-strip { display: grid; grid-template-columns: 1fr auto; gap: .25rem .5rem; align-items: center; font-size: .85rem; }
+.pc-fader { width: 7rem; margin: 0; flex: 0 0 auto; }
+.pc-db { width: 3.4rem; text-align: right; font-size: .75rem; font-variant-numeric: tabular-nums; color: var(--sp-muted, #999); }
 .pc-scene { width: 8.5rem; text-align: left; border-left: .4rem solid transparent; }
 .pc-scene.active { outline: 2px solid var(--ttrpg-accent, #c9a227); }
 .pc-scene.queued { box-shadow: inset 0 -.2rem 0 var(--ttrpg-accent, #c9a227); }
@@ -37,10 +39,12 @@ body.producer .container, body.producer .container-fluid { max-width: none; }
 .pc-count.warn { color: #c9a227; } .pc-count.over { color: #c0392b; }
 .pc-banner { background: #c0392b; color: #fff; padding: .35rem .6rem; border-radius: 4px; }
 .pc-markers { max-height: 9rem; overflow: auto; font-size: .8rem; }
-.pc-shot .pc-spot { position: absolute; right: .3rem; top: .25rem; font-size: .85rem; line-height: 1; padding: 0 .25rem;
+.pc-shot .pc-spot { position: absolute; right: .3rem; top: .25rem; font-size: 1.7rem; line-height: 1; padding: 0 .3rem;
   border-radius: 3px; background: rgba(0,0,0,.65); opacity: .55; }
 .pc-shot:hover .pc-spot { opacity: 1; }
 .pc-shot.featured .pc-spot { opacity: 1; color: #ffd166; background: rgba(0,0,0,.85); }
 .pc-shot.featured { box-shadow: inset 0 0 0 2px #ffd166; }
 .pc-scene .pc-link { display: block; font-size: .7rem; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pc-scene .pc-link.off { opacity: .4; text-decoration: line-through; }
+.pc-fade-sel { width: auto; }
+.pc-shot .pc-spot.pc-reset.on { opacity: 1; color: #ffd166; background: rgba(0,0,0,.85); }
