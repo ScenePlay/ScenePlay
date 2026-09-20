@@ -2,6 +2,7 @@
 and the Veo job lifecycle. Every network call is faked — no test touches
 the API or spends quota."""
 import base64
+import os
 import stat
 import time
 
@@ -41,8 +42,10 @@ class TestKeyFile:
         assert key_file.read_text() == 'sk-test-123'
         assert gemini.load_api_key() == 'sk-test-123'
         assert gemini.key_source() == 'file'
-        # 0600: the key is private to the service user
-        assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+        # 0600: the key is private to the service user (POSIX only — Windows
+        # has no mode bits; chmod there just toggles read-only)
+        if os.name != 'nt':
+            assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
         gemini.clear_api_key()
         assert gemini.configured() is False
 

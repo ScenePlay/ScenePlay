@@ -14,6 +14,11 @@
     // through tasks.json: preLaunchTask stops the copy started at login,
     // postDebugTask starts it again when the session ends. subProcess:false
     // everywhere — debugpy's child auto-attach breaks `python -m yt_dlp` on 3.14.
+    // debugAdapterPython/debugLauncherPython are set explicitly next to "python":
+    // when the interpreter the Python extension has *selected* is unusable on
+    // this OS (the other platform's venv on the shared drive), the debugpy
+    // extension resolves it to "" and that empty string wins over "python" for
+    // the adapter/launcher — F5 then dies without any error message.
 
     "version": "0.2.0",
     "configurations": [
@@ -33,10 +38,14 @@
                 "SP_CRON_APPLY": "1"
             },
             "windows": {
-                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugAdapterPython": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugLauncherPython": "${workspaceFolder}/.venv-win/Scripts/python.exe"
             },
             "linux": {
-                "python": "${workspaceFolder}/.venv/bin/python"
+                "python": "${workspaceFolder}/.venv/bin/python",
+                "debugAdapterPython": "${workspaceFolder}/.venv/bin/python",
+                "debugLauncherPython": "${workspaceFolder}/.venv/bin/python"
             }
         },
         {
@@ -59,10 +68,14 @@
                 "SP_MPV_SOCKET_PREFIX": "/tmp/mpvsocket-dev-"
             },
             "windows": {
-                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugAdapterPython": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugLauncherPython": "${workspaceFolder}/.venv-win/Scripts/python.exe"
             },
             "linux": {
-                "python": "${workspaceFolder}/.venv/bin/python"
+                "python": "${workspaceFolder}/.venv/bin/python",
+                "debugAdapterPython": "${workspaceFolder}/.venv/bin/python",
+                "debugLauncherPython": "${workspaceFolder}/.venv/bin/python"
             }
         },
         {
@@ -80,10 +93,14 @@
             "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "windows": {
-                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugAdapterPython": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugLauncherPython": "${workspaceFolder}/.venv-win/Scripts/python.exe"
             },
             "linux": {
-                "python": "${workspaceFolder}/.venv/bin/python"
+                "python": "${workspaceFolder}/.venv/bin/python",
+                "debugAdapterPython": "${workspaceFolder}/.venv/bin/python",
+                "debugLauncherPython": "${workspaceFolder}/.venv/bin/python"
             }
         },
         {
@@ -101,10 +118,14 @@
             "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "windows": {
-                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe"
+                "python": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugAdapterPython": "${workspaceFolder}/.venv-win/Scripts/python.exe",
+                "debugLauncherPython": "${workspaceFolder}/.venv-win/Scripts/python.exe"
             },
             "linux": {
-                "python": "${workspaceFolder}/.venv/bin/python"
+                "python": "${workspaceFolder}/.venv/bin/python",
+                "debugAdapterPython": "${workspaceFolder}/.venv/bin/python",
+                "debugLauncherPython": "${workspaceFolder}/.venv/bin/python"
             }
         }
     ]

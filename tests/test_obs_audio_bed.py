@@ -176,6 +176,22 @@ class TestAudioBed:
         ro._build_audio(1920, 1080, [])
         assert obs['audio'] == []
 
+    def test_feed_and_device_paths_both_check_desktop_audio(
+            self, app, settings, obs):
+        """Whichever way ScenePlay carries the music in, Desktop Audio would
+        carry it a second time — the check is not a device-path special."""
+        import routers.obs as ro
+        for transport in ('device', 'feed'):
+            settings['obs_music_transport'] = transport
+            obs['requests'].clear()
+            ro._build_audio(1920, 1080, [])
+            assert ('GetSpecialInputs', None) in obs['requests'], transport
+        settings['obs_music_transport'] = 'off'
+        obs['requests'].clear()
+        ro._build_audio(1920, 1080, [])
+        assert ('GetSpecialInputs', None) not in obs['requests'], \
+            'with the music path off, Desktop Audio may BE the music path'
+
     def test_missing_music_device_warns_and_keeps_building(
             self, app, settings, obs, monkeypatch):
         """The sink only exists while the music player is running; that must
@@ -560,6 +576,94 @@ class TestRoomBandwidth:
         settings['obs_vdo_room'] = 'abc123'
         url = ro.music_push_url()
         assert 'novideo' not in url and 'maxvideobitrate' not in url
+
+
+class TestDesktopAudioMuting:
+    """OBS's global Desktop Audio captures the speakers, and the music is on
+    the speakers on purpose (the looped-back sink on Linux, the cable's
+    "Listen" mirror on Windows). With ScenePlay carrying the music into OBS
+    itself, that is the music twice — so the build mutes Desktop Audio, mute
+    only, and says how to get it back. Seen first on the Windows rig, where
+    the music showed up on Desktop Audio before the feed tab was open."""
+
+    @pytest.fixture()
+    def desktop(self, monkeypatch, settings):
+        import integrations.obs_ws as obs_ws
+        state = {'special': {'desktop1': 'Desktop Audio', 'mic1': 'Mic/Aux'},
+                 'muted': {'Desktop Audio': False, 'Mic/Aux': False}}
+        calls = {'muted': [], 'removed': []}
+
+        def fake_request(rtype, data=None, timeout=3):
+            if rtype == 'GetSpecialInputs':
+                return dict(state['special'])
+            if rtype == 'GetInputMute':
+                return {'inputMuted': state['muted'][data['inputName']]}
+            if rtype == 'RemoveInput':
+                calls['removed'].append(data['inputName'])
+                return {}
+            return {}
+        monkeypatch.setattr(obs_ws, 'request', fake_request)
+        monkeypatch.setattr(
+            obs_ws, 'set_input_mute',
+            lambda n, m, **k: calls['muted'].append((n, m)) or
+            state['muted'].__setitem__(n, m))
+        return state, calls
+
+    def test_windows_feed_rig_mutes_desktop_audio_and_names_the_mirror(
+            self, app, settings, desktop, monkeypatch):
+        import routers.obs as ro
+        monkeypatch.setattr(ro, 'music_cable_platform', lambda: True)
+        _state, calls = desktop
+        warnings = []
+        ro._mute_desktop_audio(warnings)
+        assert calls['muted'] == [('Desktop Audio', True)]
+        assert calls['removed'] == [], 'mute only — never removed'
+        assert len(warnings) == 1
+        assert 'Listen to this device' in warnings[0]
+        assert 'Audio Mixer' in warnings[0], 'must say how to get it back'
+
+    def test_linux_rig_blames_the_looped_back_sink(self, app, settings, desktop,
+                                                   monkeypatch):
+        import routers.obs as ro
+        monkeypatch.setattr(ro, 'music_cable_platform', lambda: False)
+        _state, calls = desktop
+        warnings = []
+        ro._mute_desktop_audio(warnings)
+        assert calls['muted'] == [('Desktop Audio', True)]
+        assert 'looped back' in warnings[0] and 'Listen' not in warnings[0]
+
+    def test_an_already_muted_desktop_audio_stays_quiet(self, app, settings,
+                                                        desktop):
+        import routers.obs as ro
+        state, calls = desktop
+        state['muted']['Desktop Audio'] = True
+        warnings = []
+        ro._mute_desktop_audio(warnings)
+        assert calls['muted'] == [] and warnings == []
+
+    def test_only_the_desktop_inputs_are_touched(self, app, settings, desktop):
+        import routers.obs as ro
+        _state, calls = desktop
+        ro._mute_desktop_audio([])
+        assert all(n != 'Mic/Aux' for n, _m in calls['muted'])
+
+    def test_a_rig_with_no_desktop_audio_does_nothing(self, app, settings,
+                                                      desktop):
+        import routers.obs as ro
+        state, calls = desktop
+        state['special'] = {'mic1': 'Mic/Aux'}
+        ro._mute_desktop_audio([])
+        assert calls['muted'] == []
+
+    def test_an_unreachable_obs_never_breaks_the_build(self, app, settings,
+                                                       monkeypatch):
+        import integrations.obs_ws as obs_ws
+        import routers.obs as ro
+
+        def boom(*a, **k):
+            raise obs_ws.ObsUnavailable('gone')
+        monkeypatch.setattr(obs_ws, 'request', boom)
+        ro._mute_desktop_audio([])          # must not raise
 
 
 class TestMachineMicMuting:

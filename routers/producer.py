@@ -683,9 +683,11 @@ def set_transition_pref(name, ms):
     ms = max(0, min(TRANSITION_MS_MAX, ms))
     fixed = bool(known.get(name))
     appsettingSet('obs_transition', name)
-    if fixed:
+    if fixed or ms <= 0:
         # Cut takes no duration: keep the saved fade length untouched so
         # switching back to Fade brings the last length with it (Eric, 2026-09-19).
+        # A zero-length fade keeps it too: 0 ms is a cut wearing a fade's name,
+        # and the console used to send one whenever its length box showed "Cut".
         ms = _saved_transition(snap)[1]
     else:
         appsettingSet('obs_transition_ms', str(ms))
@@ -731,12 +733,14 @@ def api_obs_connect(user=Depends(require_dm)):
 
 @router.post('/spotlight')
 def api_spotlight(data: dict = Depends(json_body), user=Depends(require_dm)):
-    """The Broadcast page's spotlight, from the console — but as a SETTING,
-    never a cut: {'key': 'char:N'|'dm'} re-lays-out the party scene with that
-    tile enlarged (the rest shrink), {'key': ''} evens the table out again.
-    Program is left alone: set it while a closeup or the map is up and the
-    party scene is already arranged when you cut back to it (the Broadcast
-    page's own buttons, by contrast, cut to the party scene as they go)."""
+    """The Broadcast page's spotlight, from the console: {'key': 'char:N'|'dm'}
+    re-lays-out the party scene with that tile enlarged (the rest shrink),
+    {'key': ''} evens the table out again. A setting, never a cut: the party
+    scene is ARRANGED and Program stays where it is — a closeup or the
+    post-show card must not be yanked off air because the operator lined up
+    the next spotlight; the arrangement goes live with the next Take or cut
+    to the party scene. (2026-09-19 briefly made it cut when Program was
+    elsewhere; reversed 2026-09-20, Eric.)"""
     return spotlight(str(data.get('key', '') or ''))
 
 

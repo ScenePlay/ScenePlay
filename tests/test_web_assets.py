@@ -80,7 +80,8 @@ def test_dynamic_view_imports_exist():
 def test_no_jinja_leftovers():
     bad = []
     for root, _dirs, files in os.walk(WEB):
-        if '/vendor' in root or '/shared' in root:
+        rel = os.path.relpath(root, WEB).replace(os.sep, '/')
+        if rel.startswith(('vendor', 'shared')) or '/vendor' in rel or '/shared' in rel:
             continue
         for f in files:
             if not f.endswith(('.js', '.html', '.css')):
@@ -90,6 +91,22 @@ def test_no_jinja_leftovers():
                 if needle in src:
                     bad.append(f'{os.path.relpath(os.path.join(root, f), WEB)}: {needle}')
     assert not bad, '\n'.join(bad)
+
+
+def test_no_lit_boolean_attribute_syntax():
+    """dom.js's html`` is a string template: lit's `?attr=${bool}` renders as
+    a bogus attribute the browser ignores. The producer console's transition
+    selects were painted that way and snapped to their first entry on every
+    repaint (so Cut/Fade never seemed to stick)."""
+    pat = re.compile(r'\?(selected|checked|disabled|hidden)=')
+    bad = []
+    for root, _dirs, files in os.walk(os.path.join(WEB, 'app')):
+        if 'vendor' in root.replace(os.sep, '/').split('/'):
+            continue
+        for f in files:
+            if f.endswith('.js') and pat.search(_read(os.path.join(root, f))):
+                bad.append(os.path.relpath(os.path.join(root, f), WEB))
+    assert not bad, bad
 
 
 def test_every_route_serves_shell(client):

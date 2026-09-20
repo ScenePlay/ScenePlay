@@ -38,9 +38,10 @@ class TestRefs:
 
     def test_resolve(self, env):
         root, db = env
-        assert sa.resolve_path(root, db, 'portraits', 'kara.png') == os.path.join(root, 'static/uploads/portraits/kara.png')
-        assert sa.resolve_path(root, db, 'portraits', '../battlemaps/cave.jpg') == os.path.join(root, 'static/uploads/battlemaps/cave.jpg')
-        assert sa.resolve_path(root, db, 'obs', '../../../assets/media/video/5.mp4').endswith('Videos/clip.mp4')
+        n = os.path.normpath
+        assert n(sa.resolve_path(root, db, 'portraits', 'kara.png')) == n(os.path.join(root, 'static/uploads/portraits/kara.png'))
+        assert n(sa.resolve_path(root, db, 'portraits', '../battlemaps/cave.jpg')) == n(os.path.join(root, 'static/uploads/battlemaps/cave.jpg'))
+        assert n(sa.resolve_path(root, db, 'obs', '../../../assets/media/video/5.mp4')).endswith(n('Videos/clip.mp4'))
         assert sa.resolve_path(root, db, 'obs', '../../../assets/media/video/5.webm') is None, 'ext must match'
         assert sa.resolve_path(root, db, 'obs', '../../../assets/media/video/6.mp4') is None, 'unfinished download'
         assert sa.resolve_path(root, db, 'portraits', '../etc/passwd') is None

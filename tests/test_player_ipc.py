@@ -181,6 +181,8 @@ def test_sql_stop_routes_by_engine(monkeypatch):
     monkeypatch.setattr(config, 'PLAYER', 'ipc')
     monkeypatch.setattr(sql.mpv_ipc, 'music_stop', lambda: calls.append('stop'))
     monkeypatch.setattr(sql.os, 'system', lambda cmd: calls.append(cmd))
+    # Windows kills by command line through psutil instead of `pkill -f`
+    monkeypatch.setattr(sql, '_nt_kill_by_cmdline', lambda substr: calls.append(f'kill {substr}'))
     sql.queue_next()
     assert calls == ['stop']
     calls.clear()

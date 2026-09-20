@@ -1,6 +1,6 @@
 // Producer console behaviour: arm / take / map view, snapshot polling, levels,
 // audio strip, ScenePlay tiles, clocks, markers, hotkeys.
-import { $, $$, html, render } from '../../../lib/dom.js';
+import { $, $$, html, raw, render } from '../../../lib/dom.js';
 import { api } from '../../../api.js';
 import { toast } from '../../../ui/toast.js';
 import { token } from '../../../auth.js';
@@ -105,23 +105,30 @@ export function createConsole(ctx, root, onRefresh = null) {
 
   // The Take fade: type and length, saved on the server (obs_transition /
   // obs_transition_ms) so the Broadcast page and every Take agree.
+  // Options carry a real `selected` attribute: dom.js's html`` is a string
+  // template, so lit's boolean-attribute form (a `?` before `selected`) rendered as a bogus attribute the
+  // browser ignores — both selects snapped to their first entry on every
+  // repaint, and a Fade picked while the length box showed "Cut" saved 0 ms.
   const FADE_MS = [250, 500, 750, 1000, 1500, 2000];
   function paintFade(d) {
     const type = $('#pc-fade-type', root), ms = $('#pc-fade-ms', root);
     if (!type || !ms) return;
     const names = d.transitions || [];
     const fixed = new Set(d.transitions_fixed || []);
+    const cur = d.transition || '';
+    const isFixed = !!d.transition_fixed || fixed.has(cur);
     if (document.activeElement !== type) {
-      const cur = d.transition || '';
       const opts = names.length ? names : (cur ? [cur] : []);
-      render(type, html`${opts.map(n => html`<option value="${n}" ?selected=${n === cur}>${n}</option>`)}`);
+      render(type, html`${opts.map(n => html`<option value="${n}"${n === cur ? raw(' selected') : ''}>${n}</option>`)}`);
       type.disabled = !names.length;
     }
     if (document.activeElement !== ms) {
-      const cur = Number(d.transition_ms) || 0;
-      const list = FADE_MS.includes(cur) || cur === 0 ? FADE_MS : [...FADE_MS, cur].sort((a, b) => a - b);
-      render(ms, html`${[0, ...list].map(v => html`<option value="${v}" ?selected=${v === cur}>${v === 0 ? 'Cut' : v + ' ms'}</option>`)}`);
-      ms.disabled = !!d.transition_fixed || fixed.has(d.transition || '');   // Cut: greyed, length remembered
+      // The saved length, kept while Cut is selected so switching back to
+      // Fade brings it along; a length outside the list is still offered.
+      const curMs = Number(d.transition_ms) || 0;
+      const list = curMs > 0 && !FADE_MS.includes(curMs) ? [...FADE_MS, curMs].sort((a, b) => a - b) : FADE_MS;
+      render(ms, html`${list.map(v => html`<option value="${v}"${v === curMs ? raw(' selected') : ''}>${v} ms</option>`)}`);
+      ms.disabled = isFixed;                                   // Cut: greyed, length remembered
     }
   }
   async function setFade() {
@@ -394,6 +401,10 @@ export function createConsole(ctx, root, onRefresh = null) {
     });
     ctx.on($('#pc-fade-type', root), 'change', setFade);
     ctx.on($('#pc-fade-ms', root), 'change', setFade);
+    // A select keeps keyboard focus after a pick, and the hotkey handler
+    // below ignores keys aimed at form fields — so Shift+1, Enter and the
+    // rest went dead until the operator clicked elsewhere. Hand focus back.
+    ctx.on(root, 'change', e => { if (e.target.matches && e.target.matches('select.pc-fade-sel')) e.target.blur(); });
     ctx.on($('#pc-autocam', root), 'change', e => api.post(`${P}/auto-cam-pause`, { paused: !e.target.checked }));
     ctx.on($('#pc-vol', root), 'change', e => api.post('/set_volume', { volume: Number(e.target.value) }));
     // OBS faders: label and throttled post while dragging, a final post on
@@ -418,7 +429,7 @@ export function createConsole(ctx, root, onRefresh = null) {
       // Shot hotkeys come from the state document (the Broadcast page's
       // mapping: digits = tiles in party order, 0 party, B map, I intermission, P pre-show, O post-show, F blank screen).
       const hk = e.key.length === 1 ? e.key.toUpperCase() : '';
-      // Shift+digit spotlights that player inside the party scene (live);
+      // Shift+digit spotlights that player inside the party scene (arranges it; no cut);
       // Shift+0 evens the table out. Digit codes are used because Shift
       // changes e.key on many layouts (Shift+1 -> '!').
       if (e.shiftKey && /^Digit[0-9]$/.test(e.code)) {

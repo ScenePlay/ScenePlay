@@ -4147,8 +4147,8 @@ def _build_audio(canvas_w, canvas_h, warnings):
             'source audio at all — measured. Player voices and any vdo.ninja '
             'music feed will be silent on this machine whatever is set here.')
     _place_music(party, transport, canvas_w, warnings)
-    if transport == 'device':
-        _warn_if_music_doubled(warnings)
+    if transport in ('device', 'feed'):
+        _mute_desktop_audio(warnings)
     _mute_machine_mics(warnings)
 
     _drop_legacy_audio_scene(warnings)
@@ -4310,15 +4310,36 @@ def _mute_machine_mics(warnings):
                 continue
 
 
-def _warn_if_music_doubled(warnings):
-    """Desktop Audio also hears the music, because the music sink is looped
-    back to the GM's speakers so they can hear it too. Capturing both puts it
-    in the stream twice, slightly out of phase."""
+def _mute_desktop_audio(warnings):
+    """Mute OBS's global Desktop Audio when ScenePlay already carries the
+    music into OBS on its own path (the device capture or the vdo.ninja feed).
+
+    Desktop Audio captures the machine's speakers, and the music is on those
+    speakers on purpose: Linux loops the capture sink back so the GM hears
+    it, Windows mirrors the cable with "Listen to this device". So OBS heard
+    the music twice — once clean through ScenePlay's source, once through the
+    speakers, slightly late — plus every other sound the PC makes. Found on
+    the Windows rig (Eric, 2026-09-20): the mixer showed the music arriving
+    on Desktop Audio before the feed tab was even open.
+
+    This used to be a build note asking the DM to mute it. Muted here
+    instead, the same way the machine mics are handled, and MUTE only — never
+    removed, never unmuted: a DM who wants desktop sound on the stream gets it
+    back with one click in the Audio Mixer, and the note says so. With the
+    music transport off, Desktop Audio may be the DM's deliberate music path
+    (an OBS on the same PC capturing the cable), so the caller skips this."""
     import integrations.obs_ws as obs_ws
     try:
         special = obs_ws.request('GetSpecialInputs')
     except (obs_ws.ObsRejected, obs_ws.ObsUnavailable):
         return
+    if music_cable_platform():
+        why = ('it captures this machine\'s speakers, where "Listen to this '
+               'device" mirrors the music cable, so the music was reaching the '
+               'stream a second time — with everything else this PC plays')
+    else:
+        why = ('it also hears the music sink looped back to your speakers, so '
+               'the music was reaching the stream twice, slightly out of phase')
     for key in ('desktop1', 'desktop2'):
         name = special.get(key)
         if not name:
@@ -4327,13 +4348,12 @@ def _warn_if_music_doubled(warnings):
             if obs_ws.request('GetInputMute',
                               {'inputName': name})['inputMuted']:
                 continue
+            obs_ws.set_input_mute(name, True)
         except (obs_ws.ObsRejected, obs_ws.ObsUnavailable):
             continue
         warnings.append(
-            f'"{name}" is also capturing this machine\'s audio, so the music '
-            f'may reach the stream twice. Mute it in the Audio Mixer, or '
-            f'untick "Capture the music into OBS".')
-        return
+            f'Muted OBS\'s "{name}": {why}. Unmute it in the Audio Mixer if '
+            f'you meant to stream desktop sound.')
 
 
 def _bloom_start(target):

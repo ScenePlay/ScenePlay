@@ -464,6 +464,23 @@ def test_transition_picker_is_back(dm_client, obs, fresh, monkeypatch):
     assert r.status_code == 200 and r.get_json()['transition_ms'] == 700
 
 
+def test_cut_keeps_the_fade_length_and_fade_brings_it_back(dm_client, obs, fresh, monkeypatch):
+    """Cut is fixed: choosing it greys the length out but never forgets it,
+    and a zero length (the console sent one while its box showed "Cut")
+    does not overwrite the saved fade either — switching back to Fade
+    takes the last configured length (Eric, 2026-09-19)."""
+    _party(monkeypatch)
+    post = lambda body: dm_client.post('/ttrpg/producer/api/transition', json=body).get_json()  # noqa: E731
+    state = lambda: dm_client.get('/ttrpg/producer/api/state').get_json()  # noqa: E731
+    assert post({'name': 'Fade', 'ms': 700}) == {'ok': True, 'transition': 'Fade', 'transition_ms': 700, 'fixed': False}
+    assert post({'name': 'Cut', 'ms': 700}) == {'ok': True, 'transition': 'Cut', 'transition_ms': 700, 'fixed': True}
+    d = state()
+    assert (d['transition'], d['transition_fixed'], d['transition_ms']) == ('Cut', True, 700)
+    assert post({'name': 'Fade', 'ms': 0}) == {'ok': True, 'transition': 'Fade', 'transition_ms': 700, 'fixed': False}
+    d = state()
+    assert (d['transition'], d['transition_fixed'], d['transition_ms']) == ('Fade', False, 700)
+
+
 def test_broadcast_cut_is_tagged(dm_client, obs, fresh, monkeypatch):
     """Every cut the Broadcast page makes tells switch_scene who did it, so the
     console's Program tile can say "by broadcast page" instead of "automatic"."""
@@ -842,15 +859,17 @@ def test_take_without_a_transition_uses_the_saved_default(dm_client, obs, fresh,
 @pytest.fixture()
 def spot(monkeypatch):
     """Recording stubs of the party-layout machinery. `_do_feature` and
-    `_unfeature` (the Broadcast page's handlers) are poisoned: they cut
-    program to the party scene, which the console's spotlight must never do."""
+    `_unfeature` (the Broadcast page's handlers) are poisoned so the console
+    keeps its own, leaner path; any Program cut would show up as 'switch'."""
+    import integrations.obs_ws as obs_ws
     import routers.obs as ro
     calls = []
 
     def never(*a, **k):
-        raise AssertionError('the console spotlight must not cut program')
+        raise AssertionError('the console spotlight has its own path')
     monkeypatch.setattr(ro, '_do_feature', never)
     monkeypatch.setattr(ro, '_unfeature', never)
+    monkeypatch.setattr(obs_ws, 'switch_scene', lambda scene, **k: calls.append(('switch', scene, k.get('by'))))
     monkeypatch.setattr(ro, '_sync_party_scene', lambda featured_id=None, resize=False: calls.append(('layout', featured_id)) or {'warnings': []})
     monkeypatch.setattr(ro, '_set_featured', lambda cid: calls.append(('set', cid)))
     monkeypatch.setattr(ro, '_cancel_return', lambda: calls.append(('cancel_return',)))
@@ -859,18 +878,30 @@ def spot(monkeypatch):
     return calls
 
 
-def test_spotlight_features_a_player_without_cutting(dm_client, obs, fresh, spot, monkeypatch):
+def test_spotlight_features_a_player_without_touching_program(dm_client, obs, fresh, spot, monkeypatch):
+    """Program is elsewhere (a closeup, the post-show card): the party scene
+    is ARRANGED for the spotlight but Program is left alone — the operator
+    lines the layout up and it goes live with the next Take or cut. (The
+    2026-09-19 build cut to the party scene here; reversed 2026-09-20.)"""
     _party(monkeypatch)
-    obs['state']['current_scene'] = 'ScenePlay Map'            # program is elsewhere and must stay there
+    obs['state']['current_scene'] = 'ScenePlay Map'
     r = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'char:1'})
     assert r.get_json() == {'ok': True, 'featured': 'char:1', 'featured_id': 1}
     assert spot == [('layout', 1), ('set', 1), ('emit', 'feature')]
-    assert not any(c[0] == 'switch' for c in obs['calls'])
     assert dm_client.get('/ttrpg/producer/api/state').get_json()['featured_id'] == 1
 
 
-def test_spotlight_group_evens_the_table_without_cutting(dm_client, obs, fresh, spot, monkeypatch):
+def test_spotlight_leaves_program_alone_when_the_party_is_already_live(dm_client, obs, fresh, spot, monkeypatch):
     _party(monkeypatch)
+    obs['state']['current_scene'] = 'ScenePlay Party'
+    r = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': 'char:1'})
+    assert r.get_json() == {'ok': True, 'featured': 'char:1', 'featured_id': 1}
+    assert spot == [('layout', 1), ('set', 1), ('emit', 'feature')]
+
+
+def test_spotlight_group_evens_the_table_without_touching_program(dm_client, obs, fresh, spot, monkeypatch):
+    _party(monkeypatch)
+    obs['state']['current_scene'] = 'ScenePlay Post'
     r = dm_client.post('/ttrpg/producer/api/spotlight', json={'key': ''})
     assert r.get_json() == {'ok': True, 'featured': None, 'featured_id': None}
     assert spot == [('layout', None), ('set', None), ('cancel_return',), ('emit', 'group')]

@@ -156,7 +156,7 @@ class TestTexturePaths:
                 'name': 'mine', 'tile_ft': '7'}, files={'image': ('x.png', _png_bytes(), 'image/png')})
         paths = tex_mod.texture_paths(['flagstone', 'mine', 'ghost'])
         assert 'ghost' not in paths
-        assert paths['flagstone']['path'].endswith('builtin/flagstone.jpg')
+        assert paths['flagstone']['path'].replace(os.sep, '/').endswith('builtin/flagstone.jpg')
         assert os.path.exists(paths['flagstone']['path'])
         assert paths['mine']['tile_ft'] == 7.0
         assert os.path.exists(paths['mine']['path'])

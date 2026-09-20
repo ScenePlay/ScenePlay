@@ -24,6 +24,9 @@ import time
 
 import core.config as config
 
+if os.name == 'nt':
+    import _winapi          # overlapped named-pipe I/O (see _Transport)
+
 
 class MpvError(Exception):
     pass
@@ -55,55 +58,106 @@ def _parse_text_command(command):
 # ── transport ─────────────────────────────────────────────────────────────────
 
 class _Transport:
-    """Line-oriented duplex channel to one mpv: unix socket or named pipe."""
+    """Line-oriented duplex channel to one mpv: unix socket or named pipe.
+
+    Windows: the pipe is opened as an OVERLAPPED Win32 handle and driven with
+    _winapi.ReadFile / WriteFile, never a Python file object. `open(path,
+    'r+b')` looked fine but deadlocked the persistent player: MpvClient's
+    reader thread sits in readline() and the C runtime holds the descriptor's
+    lock for the whole blocking read, so the player thread's write() of the
+    next command waited until mpv sent SOMETHING — and an idle mpv never does.
+    On the Windows appliance no track ever loaded (2026-09-20). Overlapped I/O
+    lets a read stay pending while a write goes out on the same handle."""
+
+    _PIPE_CHUNK = 16384
 
     def __init__(self, path, timeout=2.0):
         self.path = path
+        self.timeout = timeout
+        self._sock = None
+        self._h = None
         if os.name == 'nt':
-            self._pipe = open(path, 'r+b', buffering=0)
-            self._sock = None
+            self._h = _winapi.CreateFile(
+                path, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
         else:
             self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self._sock.settimeout(timeout)
             self._sock.connect(path)
-            self._pipe = None
         self._buf = b''
 
     def write_line(self, text):
         data = text.encode('utf-8') + b'\n'
-        if self._pipe is not None:
-            self._pipe.write(data)
+        if self._h is not None:
+            self._pipe_write(data)
         else:
             self._sock.sendall(data)
 
     def read_line(self, timeout=None):
         """One JSON line, or None on timeout; raises ConnectionError when the
         peer is gone."""
-        if self._pipe is not None:
-            line = self._pipe.readline()
-            if not line:
-                raise ConnectionError('mpv pipe closed')
-            return line.decode('utf-8', 'replace').rstrip('\r\n')
-        self._sock.settimeout(timeout)
         while b'\n' not in self._buf:
-            try:
-                chunk = self._sock.recv(65536)
-            except socket.timeout:
+            chunk = self._pipe_read(timeout) if self._h is not None else self._sock_read(timeout)
+            if chunk is None:
                 return None
-            if not chunk:
-                raise ConnectionError('mpv socket closed')
             self._buf += chunk
         line, self._buf = self._buf.split(b'\n', 1)
-        return line.decode('utf-8', 'replace')
+        return line.decode('utf-8', 'replace').rstrip('\r')
 
     def close(self):
         try:
-            if self._pipe is not None:
-                self._pipe.close()
-            else:
+            if self._h is not None:
+                h, self._h = self._h, None
+                _winapi.CloseHandle(h)      # cancels the reader's pending read
+            elif self._sock is not None:
                 self._sock.close()
         except Exception:
             pass
+
+    # unix socket -----------------------------------------------------------------
+    def _sock_read(self, timeout):
+        self._sock.settimeout(timeout)
+        try:
+            chunk = self._sock.recv(65536)
+        except socket.timeout:
+            return None
+        if not chunk:
+            raise ConnectionError('mpv socket closed')
+        return chunk
+
+    # windows named pipe ------------------------------------------------------------
+    def _pipe_write(self, data):
+        try:
+            ov, err = _winapi.WriteFile(self._h, data, overlapped=True)
+            if err == _winapi.ERROR_IO_PENDING:
+                ms = max(1, int(self.timeout * 1000))
+                if _winapi.WaitForMultipleObjects([ov.event], False, ms) == _winapi.WAIT_TIMEOUT:
+                    ov.cancel()
+            n, err = ov.GetOverlappedResult(True)
+        except OSError as e:
+            raise ConnectionError(f'mpv pipe write failed: {e}') from e
+        if err == _winapi.ERROR_OPERATION_ABORTED or n != len(data):
+            raise ConnectionError('mpv pipe write timed out')
+
+    def _pipe_read(self, timeout):
+        """Bytes now available (a chunk, not a line), None when `timeout`
+        passes with nothing, ConnectionError when the pipe is gone. A read
+        that times out is cancelled — but it may have completed in the gap
+        between the wait and the cancel, and then its bytes are returned."""
+        try:
+            ov, err = _winapi.ReadFile(self._h, self._PIPE_CHUNK, overlapped=True)
+            if err == _winapi.ERROR_IO_PENDING:
+                ms = _winapi.INFINITE if timeout is None else max(0, int(timeout * 1000))
+                if _winapi.WaitForMultipleObjects([ov.event], False, ms) == _winapi.WAIT_TIMEOUT:
+                    ov.cancel()
+            n, err = ov.GetOverlappedResult(True)
+        except OSError as e:
+            if getattr(e, 'winerror', None) == _winapi.ERROR_OPERATION_ABORTED:
+                return None
+            raise ConnectionError(f'mpv pipe closed: {e}') from e
+        if err == _winapi.ERROR_OPERATION_ABORTED and not n:
+            return None
+        return bytes(ov.getbuffer()[:n]) if n else None
 
 
 # ── persistent JSON client ────────────────────────────────────────────────────

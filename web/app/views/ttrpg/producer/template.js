@@ -1,12 +1,12 @@
 // Producer console markup. Everything dynamic is painted by console.js; this
 // renders the frame once from the first state document.
-import { html } from '../../../lib/dom.js';
+import { html, raw } from '../../../lib/dom.js';
 
 const shotTile = (s, i) => html`<button type="button" class="pc-shot ${s.built ? '' : 'unbuilt'}" data-shot="${s.key}"
   title="${s.built ? 'Arm ' + s.label : s.label + (s.kind === 'special' ? ': scene not built — run Build on the Broadcast page' : ': closeup scene not built — click Build closeups')}">
   <img alt="" data-snap="${s.key}"><span class="pc-key">${s.hotkey || ''}</span>
-  ${s.kind === 'special' ? '' : html`<span class="pc-spot" data-spot="${s.key}" title="Spotlight ${s.label} in the party scene — sets the layout, never cuts (Shift+${s.hotkey || 'click'})">&#9728;</span>`}
-  ${s.key === 'party' ? html`<span class="pc-spot pc-reset" data-spot="" title="Reset the party grid to the even layout — sets the layout, never cuts (Shift+0)">&#8862;</span>` : ''}
+  ${s.kind === 'special' ? '' : html`<span class="pc-spot" data-spot="${s.key}" title="Spotlight ${s.label} in the party scene — arranges the scene only, Program stays put (Shift+${s.hotkey || 'click'})">&#9728;</span>`}
+  ${s.key === 'party' ? html`<span class="pc-spot pc-reset" data-spot="" title="Reset the party grid to the even layout — arranges the scene only, Program stays put (Shift+0)">&#8862;</span>` : ''}
   <span class="pc-shot-label">${s.label}</span></button>`;
 
 // The battle map's AUTO / 2D / 3D button, same words: auto is the stream's
@@ -50,7 +50,7 @@ export function render(d) {
       <div class="d-flex align-items-center gap-1 mb-1"><b>Producer</b>
         <span class="text-secondary" id="pc-producer-feed" title="Your camera link's state">${d.producer && d.producer.feed === 'live' ? 'camera live' : d.producer && d.producer.feed === 'stale' ? 'camera dropped' : ''}</span></div>
       <div class="d-flex gap-1 mb-1">
-        <select class="form-select form-select-sm pc-fade-sel" id="pc-producer-icon" title="Symbol beside your name on stream">${(d.producer && d.producer.icons || ['']).map(i => html`<option value="${i}" ?selected=${i === ((d.producer && d.producer.icon) || '')}>${i || '—'}</option>`)}</select>
+        <select class="form-select form-select-sm pc-fade-sel" id="pc-producer-icon" title="Symbol beside your name on stream">${(d.producer && d.producer.icons || ['']).map(i => html`<option value="${i}"${i === ((d.producer && d.producer.icon) || '') ? raw(' selected') : ''}>${i || '—'}</option>`)}</select>
         <input type="text" class="form-control form-control-sm" id="pc-producer-name" maxlength="60" placeholder="name on stream"
           value="${d.producer ? d.producer.name : 'Producer'}" title="The name on your tile">
         <button type="button" class="btn btn-sm btn-outline-secondary" id="pc-producer-save">Save</button></div>
