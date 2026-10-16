@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from extensions import *          # noqa: F401,F403
 from sql import *                 # noqa: F401,F403
-from core.procutil import pid_alive
+from core.procutil import pid_alive, uptime_info
 from sql import appsettingFlagGet
 from models.mediaMetadata import tblmediametadata
 from lighting.ledPlayer import *           # noqa: F401,F403
@@ -366,7 +366,8 @@ def killqueue():
 def isAlive():
     rowWatchManage = CRUD_tblAppSettings(['WatchManage'], "byName")
     watchManage = rowWatchManage[0][2] if rowWatchManage else 1
-    return {'isAlive': 'true', 'pid': os.getpid(), 'WatchManage': watchManage}
+    return {'isAlive': 'true', 'pid': os.getpid(), 'WatchManage': watchManage,
+            'uptime': uptime_info()}
 
 
 from media.mpv_ipc import mpv_command as _mpv_command   # noqa: E402

@@ -67,6 +67,9 @@ function page(d) {
       <ul style="font-size:.85em;color:var(--sp-muted);margin:0 0 6px 42px;"><li>Use on low-memory machines (like a Pi Zero), where unpacking a large media folder can crash the restore.</li><li>If you need the images, copy the <code>static/uploads</code> folder over separately.</li></ul>
       <br><button type="submit" class="btn btn-primary">Import</button></form>`)}
   ${card('This Server', html`
+    <p style="font-size:.85em;margin:6px 0;" title="Server = this computer since its last boot; ScenePlay = the app since its last start (resets on Update or a watchdog restart)">
+      <b>Server up</b> ${d.uptime ? d.uptime.server_uptime : '?'} <span style="color:var(--sp-muted);">(since ${d.uptime ? d.uptime.server_boot : '?'})</span>
+      &nbsp;&middot;&nbsp; <b>ScenePlay up</b> ${d.uptime ? d.uptime.app_uptime : '?'} <span style="color:var(--sp-muted);">(since ${d.uptime ? d.uptime.app_started : '?'})</span></p>
     <button type="button" class="btn btn-secondary" data-action="/api/v1/system/reset-ytdlp" data-confirm="Delete the yt-dlp checkout and re-clone it fresh from GitHub? Use this when downloads misbehave and a normal update has not helped. May take a minute." title="Delete the yt-dlp checkout and re-clone it fresh from GitHub">Reset yt-dlp</button>
     <span style="font-size:.85em;color:var(--sp-muted);">Re-downloads the yt-dlp source used for YouTube imports.</span><br><br>
     <div style="margin:6px 0;"><label for="restart-sudo" style="font-size:.85em;display:block;margin-bottom:2px;"><b>System (sudo) password — optional.</b> Needed only when this box's sudo prompts for a password; leave blank if reboots already work. Used once and never stored.</label>

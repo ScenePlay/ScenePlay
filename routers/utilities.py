@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 import ops.backup_restore as backup_restore
 import core.config as config
+from core.procutil import uptime_info
 import core.events as events
 from core.db import db
 from extensions import currentvolume
@@ -72,6 +73,7 @@ def page(user=Depends(get_current_user)):
         'media_roots': appsettingGet('media_search_roots', '') or '',
         'dm_only_sceneplay': dm_only_sceneplay_enabled(),
         'is_dm': is_dm,
+        'uptime': uptime_info(),
         'gemini_configured': gemini.configured(),
         'gemini_key_source': gemini.key_source(),
         'gemini_models': {m: gemini.resolve_model(m) for m in ('text', 'image', 'video')},

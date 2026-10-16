@@ -36,3 +36,36 @@ def pid_alive(pid):
         # as "not running", so keep that behavior identical on Linux.
         return False
     return True
+
+
+# ── uptime (Utilities page, /isAlive) ─────────────────────────────────────────
+
+def fmt_duration(seconds):
+    """Whole seconds -> '3d 4h 12m' / '1h 0m' / '5m' (minutes resolution)."""
+    s = max(0, int(seconds))
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m = s // 60
+    if d:
+        return f'{d}d {h}h {m}m'
+    if h:
+        return f'{h}h {m}m'
+    return f'{m}m'
+
+
+def uptime_info():
+    """Server = OS boot; app = THIS web process's start (psutil, so it is right
+    on Linux, the Pi and Windows regardless of import order and resets on
+    every watchdog/Update restart). Timestamps use the app's local format."""
+    import time
+    import psutil
+    now = time.time()
+    boot = psutil.boot_time()
+    started = psutil.Process(os.getpid()).create_time()
+    fmt = lambda t: time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t))   # noqa: E731
+    return {
+        'server_boot': fmt(boot), 'server_uptime_s': int(now - boot),
+        'server_uptime': fmt_duration(now - boot),
+        'app_started': fmt(started), 'app_uptime_s': int(now - started),
+        'app_uptime': fmt_duration(now - started),
+    }
