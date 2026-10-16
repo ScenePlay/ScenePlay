@@ -85,7 +85,7 @@ export function render(d) {
     <div class="d-flex gap-1">
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/nextsong">Skip &#9197;</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/music_stopstart" title="Pause or resume the music player (the same toggle the player bar has)">Play/Pause &#9199;</button>
-      <button type="button" class="btn btn-sm btn-outline-danger" data-sp="/killqueue">Kill &#9209;</button>
+      <button type="button" class="btn btn-sm btn-outline-danger" id="pc-kill" title="Stop the music and video queues and turn the scene lights off">Kill &#9209;</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-sp="/api/lights-off">Lights off</button>
       <input type="range" class="form-range ms-2" id="pc-vol" min="0" max="100" style="width:8rem" title="Room music volume — the music player itself, not what the stream hears (that fader is in the Audio card)"></div>
   </div>

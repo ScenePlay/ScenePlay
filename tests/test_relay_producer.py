@@ -163,6 +163,18 @@ def test_execute_sceneplay_commands(fresh, obs, monkeypatch):
     assert hits == [('scene', '3'), ('skip',), ('lights',), ('vol', 40)]
 
 
+def test_execute_kill_tears_down_lights_too(fresh, obs, monkeypatch):
+    """Kill = queue kill THEN the pseudo-scene -1 teardown (lights off on
+    RPiLED, WLED and the relay; CurrentScene cleared) — the same pair the
+    1.x home Kill button, cron and the TTRPG pages send."""
+    import routers.public as pub
+    hits = []
+    monkeypatch.setattr(pub, 'killqueue', lambda: hits.append(('kill',)))
+    monkeypatch.setattr(pub, 'activatescene', lambda id=None: hits.append(('scene', id)) or {'ok': True})
+    assert rp.execute({'id': 777, 'session_id': 's1', 'cmd': 'kill', 'args': {}})[1] == 'applied'
+    assert hits == [('kill',), ('scene', '-1')]
+
+
 # ── presence / consoles ──────────────────────────────────────────────────────
 
 def test_presence_counts_as_console_and_enables_studio(fresh, obs):

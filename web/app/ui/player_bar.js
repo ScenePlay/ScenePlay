@@ -87,7 +87,9 @@ export async function mountPlayerBar(el) {
   wire('playPauseButton', 'click', () => post('/video_stopstart'));
   wire('videoFwdBtn', 'click', () => post('/video_seek', { value: 30 }));
   wire('nextVideoBtn', 'click', () => post('/nextvideo'));
-  wire('killQueueBtn', 'click', () => post('/killqueue'));
+  // Kill first, THEN the pseudo-scene -1 teardown (lights off on RPiLED, WLED
+  // and the relay; CurrentScene cleared) — the pair the 1.x button sent.
+  wire('killQueueBtn', 'click', () => post('/killqueue').then(() => post('/activatescenes/?id=-1')));
   wire('keepMusicBtn', 'click', async () => {
     const r = await api.post('/api/keepmusicplaying');
     store.set('keepMusic', !!r.keep_music);

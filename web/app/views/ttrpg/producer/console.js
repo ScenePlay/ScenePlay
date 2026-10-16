@@ -383,6 +383,7 @@ export function createConsole(ctx, root, onRefresh = null) {
       const mu = e.target.closest('[data-mute]'); if (mu) { await api.post('/ttrpg/obs/api/mute', { character_id: Number(mu.dataset.mute), muted: mu.dataset.muted !== '1' }); return loadRows(); }
       switch (e.target.closest('button, .pc-clock') && (e.target.closest('button, .pc-clock').id)) {
         case 'pc-build-closeups': return buildCloseups();
+        case 'pc-kill': await api.post('/killqueue'); return api.post('/activatescenes/?id=-1');   // kill, then lights-off teardown
         case 'pc-take': return take();
         case 'pc-mapmode': return mapMode();
         case 'pc-marker': return marker();

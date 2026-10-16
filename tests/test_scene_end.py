@@ -112,7 +112,7 @@ class TestNotify:
 
 
 class TestLightsOff:
-    def test_fans_out_to_every_output(self, monkeypatch):
+    def test_fans_out_to_every_output(self, db, monkeypatch):
         import routers.public as m
         sent = {}
         monkeypatch.setattr(m, 'dispatch_led', lambda payload: sent.setdefault('led', payload))
@@ -121,3 +121,56 @@ class TestLightsOff:
         m.lights_off()
         import lighting.led_patterns as led_patterns
         assert sent == {'led': led_patterns.OFF_PAYLOAD, 'wled': True, 'relay_wled': []}
+        assert m._lights_dark() is True     # a re-click of the scene must re-push
+
+
+class TestReactivateAfterLightsOff:
+    """Re-clicking the ACTIVE scene normally skips the device pushes (the
+    lights already show it). Once lights_off() has run — scene media ended,
+    or the Lights-off button — that assumption is false and the re-click
+    must push the scene's lighting again."""
+
+    @pytest.fixture
+    def scene(self, app, monkeypatch):
+        import json
+        import routers.public as m
+        conn = sqlite3.connect(sql.database)
+        conn.execute("INSERT INTO tblScenePattern(scene_ID, patternType, params, orderBy) VALUES (7, 'solid', ?, 1)",
+                     (json.dumps({'color': [255, 0, 0]}),))
+        conn.commit()
+        conn.close()
+        sent = []
+        monkeypatch.setattr(m, 'dispatch_led', lambda payload, local=True: sent.append(('led', payload)))
+        monkeypatch.setattr(m, 'wled_Off', lambda: sent.append(('wled', 'off')))
+        monkeypatch.setattr(m, 'setWledEffect', lambda *a: sent.append(('wled', a)))
+        monkeypatch.setattr(m.relay_broadcaster, 'broadcast_wled', lambda rows: sent.append(('relay_wled', rows)))
+        monkeypatch.setattr(m, 'getWledPatternBySceneID', lambda sid: [])
+        for name in ('queue_kill', 'queue_next', 'queueVideo_next'):
+            monkeypatch.setattr(m, name, lambda: None)
+        monkeypatch.setattr(m, '_players_alive', lambda: False)
+        monkeypatch.setattr(m.time, 'sleep', lambda s: None)
+        return m, sent
+
+    @staticmethod
+    def _led_payloads(sent):
+        import json
+        return [json.loads(p)['patterns'] for kind, p in sent if kind == 'led']
+
+    def test_reclick_pushes_lights_again_after_lights_off(self, scene):
+        m, sent = scene
+        m._activate_scene('7')
+        assert self._led_payloads(sent)[0][0]['color'] == [255, 0, 0]
+        sent.clear()
+        m.lights_off()
+        assert self._led_payloads(sent) == [[{'type': 'solid', 'color': [0, 0, 0]}]]
+        sent.clear()
+        m._activate_scene('7')          # same scene, lights are dark
+        assert self._led_payloads(sent)[0][0]['color'] == [255, 0, 0]
+        assert ('relay_wled', []) in sent and ('wled', 'off') in sent
+
+    def test_reclick_with_lights_showing_skips_pushes(self, scene):
+        m, sent = scene
+        m._activate_scene('7')
+        sent.clear()
+        m._activate_scene('7')          # plain re-click: lights already show it
+        assert sent == []

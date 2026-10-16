@@ -207,7 +207,13 @@ def _activate_scene(id):
     appsettingSet('relay_push_last_drop', '')
     if scene_id is not None and scene_id > 0 \
             and appsettingGetCurrentScene() == scene_id:
+        # Re-click of the ACTIVE scene: bounce the players only — unless the
+        # lights went dark in between (scene media ran out, or the Lights-off
+        # button), in which case the strip no longer shows this scene and
+        # must be pushed again.
         _restart_players(scene_id)
+        if _lights_dark():
+            _push_scene_lights(id)
         return
     if scene_id is not None:
         appsettingSetCurrentScene(scene_id)
@@ -246,25 +252,46 @@ def _activate_scene(id):
         selectedVideo = [row[2] for row in rowsVideo]
         if selectedVideo:
             update_video_queue_selected(selectedVideo)
-        data = getWledPatternBySceneID(id)
-        if data is not None:
-            for row in data:
-                setWledEffect(row.effect, row.pallette, row.color1, row.color2, row.color3,
-                              row.speed, row.brightness, row.server_ID)
-        if len(data) == 0:
-            wled_Off()
-        relay_broadcaster.broadcast_wled(data)
-        dispatch_led(ledPattern)
+        _push_scene_lights(id, ledPattern)
     finally:
         queue_next()
         appsettingAudioPlayFlagUpdate(1)
         appsettingVideoPlayFlagUpdate(1)
 
 
+# tblAppSettings flag: '1' once lights_off() has darkened every output while a
+# scene is still recorded as current. Lets a re-click of that scene know the
+# strip no longer shows it (see _activate_scene). Cleared by every scene push.
+_LIGHTS_DARK = 'lights_dark'
+
+
+def _lights_dark():
+    return (appsettingFlagGet(_LIGHTS_DARK) or '0') == '1'
+
+
+def _push_scene_lights(id, ledPattern=None):
+    """Push scene `id`'s lighting everywhere: WLED controllers (direct and via
+    the relay) and the RPiLED payload (this box, Remote boxes, the relay)."""
+    if ledPattern is None:
+        scnPat = CRUD_tblScenePattern([id], "bySceneID")
+        ledPattern = led_patterns.build_payload((r[2], r[3], r[4]) for r in scnPat)
+    data = getWledPatternBySceneID(id)
+    if data is not None:
+        for row in data:
+            setWledEffect(row.effect, row.pallette, row.color1, row.color2, row.color3,
+                          row.speed, row.brightness, row.server_ID)
+    if len(data) == 0:
+        wled_Off()
+    relay_broadcaster.broadcast_wled(data)
+    dispatch_led(ledPattern)
+    appsettingSet(_LIGHTS_DARK, '0')
+
+
 def lights_off():
     dispatch_led(led_patterns.OFF_PAYLOAD)
     wled_Off()
     relay_broadcaster.broadcast_wled([])
+    appsettingSet(_LIGHTS_DARK, '1')
 
 
 @router.api_route('/api/lights-off', methods=['GET', 'POST'])

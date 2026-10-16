@@ -24,8 +24,10 @@ import time
 
 import core.config as config
 
-if os.name == 'nt':
-    import _winapi          # overlapped named-pipe I/O (see _Transport)
+try:
+    import _winapi          # overlapped named-pipe I/O (see _Transport); Windows only
+except ImportError:         # Linux / Pi — the unix-socket branch never touches it
+    _winapi = None
 
 
 class MpvError(Exception):
@@ -77,6 +79,8 @@ class _Transport:
         self._sock = None
         self._h = None
         if os.name == 'nt':
+            if _winapi is None:
+                raise ConnectionError('named-pipe IPC needs _winapi (Windows only)')
             self._h = _winapi.CreateFile(
                 path, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
                 _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)

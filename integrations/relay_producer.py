@@ -390,8 +390,11 @@ def _dispatch(cmd, args):
         nextsong()
         return {'ok': True}
     if cmd == 'kill':
-        from routers.public import killqueue
+        # Kill, THEN the pseudo-scene -1 teardown: lights off everywhere and
+        # CurrentScene cleared — the pair the 1.x Kill button always sent.
+        from routers.public import killqueue, activatescene
         killqueue()
+        activatescene(id='-1')
         return {'ok': True}
     if cmd == 'lights_off':
         from routers.public import lights_off
