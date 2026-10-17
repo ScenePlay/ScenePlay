@@ -463,6 +463,9 @@ Layout, briefly:
 ## Troubleshooting
 
 - **Dependencies** — rerun `./requirements.sh`.
+- **Install fails building `lgpio`** (`command 'swig' failed: No such file or directory`) — the Pi LED
+  libraries need build tools that newer Pi OS images don't ship. The installer now adds them; on an older
+  checkout run `sudo apt-get -y install swig liblgpio-dev python3-dev python3-lgpio` and rerun `./requirements.sh`.
 - **Service not starting** — `systemctl --user status sceneplay_watchdog.service`.
 - **No metadata/downloads** — both queues need internet; check the media
   table's Download Status column and `tblPlaylistQueue.last_error` for stuck

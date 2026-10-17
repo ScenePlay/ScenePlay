@@ -45,6 +45,12 @@ pip3 install -r ~/ScenePlay/requirements.txt $BREAK_SYSTEM_PACKAGES
 # LED support: led_Run.py runs via `sudo python3` (system Python, not the
 # venv), so its libraries must be installed with sudo — but only on a Pi.
 if is_raspberry_pi; then
+    # The Pi LED stack pulls in lgpio. Newer Pi OS / Python releases have no prebuilt
+    # wheel for it, so pip compiles it from source — which needs swig, the
+    # lgpio headers and the Python headers ("command 'swig' failed: No such
+    # file or directory" otherwise). python3-lgpio gives system Python a
+    # ready-made copy so pip usually doesn't have to build it at all.
+    sudo apt-get -y install swig liblgpio-dev python3-dev python3-lgpio
     sudo pip3 install rpi_ws281x adafruit-circuitpython-neopixel $BREAK_SYSTEM_PACKAGES
     sudo python3 -m pip install --force-reinstall adafruit-blinka $BREAK_SYSTEM_PACKAGES
 fi
