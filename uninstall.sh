@@ -45,6 +45,7 @@ echo "[ok] ScenePlay processes stopped"
 
 # --- autostart entries ------------------------------------------------------
 rm -f ~/.config/autostart/sceneplay.desktop ~/Desktop/ScenePlay.sh
+sudo rm -f /etc/sudoers.d/010_sceneplay    # password-less sudo rule written by requirements.sh
 echo "[ok] autostart entries removed"
 
 # --- nginx: put back the stock site config setupAutoStart.sh replaced -------

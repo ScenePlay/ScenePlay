@@ -68,23 +68,16 @@ in the taskbar (or Menu → Accessories → Terminal). Everything below is typed
 Enter after each. If a command asks for your password, type it — nothing
 appears while you type; that's normal — and press Enter.
 
-**Step 2 — one-time permission setup.** The media players and LED support
-need to run small system commands without stopping to ask for a password
-every time. Type:
-
-```bash
-sudo visudo
-```
-
-A text editor opens. Use the arrow keys to go to the bottom and add this line,
-replacing `sammy` with your username (it's shown in the prompt, e.g.
-`sammy@raspberrypi`):
+**Step 2 — permissions (automatic).** The LED support and the Restart /
+Update buttons run small system commands from the background, where nothing
+can type a password. The installer in Step 4 grants your account password-less
+`sudo` for this (it writes `/etc/sudoers.d/010_sceneplay` and checks it with
+`visudo`). Nothing to do here; if the installer ever prints a warning about
+that rule, add the line by hand with `sudo visudo`:
 
 ```
-sammy  ALL=(ALL) NOPASSWD:ALL
+yourname  ALL=(ALL) NOPASSWD:ALL
 ```
-
-Then save and exit: press **Ctrl+X**, then **Y**, then **Enter**.
 
 **Step 3 — download ScenePlay.** Copy-paste this whole block:
 
@@ -466,6 +459,10 @@ Layout, briefly:
 - **Install fails building `lgpio`** (`command 'swig' failed: No such file or directory`) — the Pi LED
   libraries need build tools that newer Pi OS images don't ship. The installer now adds them; on an older
   checkout run `sudo apt-get -y install swig liblgpio-dev python3-dev python3-lgpio` and rerun `./requirements.sh`.
+- **Install dies with `error: uninstall-no-record-file`** — an older installer force-reinstalled Blinka and pip
+  removed apt-owned Python modules on the way. Put them back with
+  `sudo apt-get -y install --reinstall python3-lgpio python3-rpi.gpio python3-serial python3-typing-extensions`,
+  then `git pull` and rerun `./requirements.sh` (it no longer forces the reinstall).
 - **Service not starting** — `systemctl --user status sceneplay_watchdog.service`.
 - **No metadata/downloads** — both queues need internet; check the media
   table's Download Status column and `tblPlaylistQueue.last_error` for stuck

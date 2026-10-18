@@ -18,6 +18,22 @@ sudo apt-get -y install pulseaudio-utils
 # venv (systemd user service), and Lite images don't ship python3-requests
 sudo apt-get -y install python3-requests
 
+# Password-less sudo for the account that runs ScenePlay. The app calls sudo
+# from a background service with no terminal (LED worker start/stop, Restart
+# Computer, cron reboot, the nginx upload-size fix in Update): a password
+# prompt there just fails silently and the LED strip never starts. One
+# drop-in file, validated by visudo and removed again if it does not parse.
+SUDOERS_FILE=/etc/sudoers.d/010_sceneplay
+if [ ! -f "$SUDOERS_FILE" ]; then
+    printf "Granting %s password-less sudo (%s)\n" "$USER" "$SUDOERS_FILE"
+    echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee "$SUDOERS_FILE" >/dev/null
+    sudo chmod 440 "$SUDOERS_FILE"
+    if ! sudo visudo -c -f "$SUDOERS_FILE" >/dev/null; then
+        sudo rm -f "$SUDOERS_FILE"
+        printf "WARNING: sudoers rule rejected and removed — LED support needs password-less sudo (see README Step 2)\n"
+    fi
+fi
+
 is_raspberry_pi() {
     local CPUINFO_PATH="/proc/cpuinfo"
     if [[ ! -e "$CPUINFO_PATH" ]]; then
@@ -51,8 +67,10 @@ if is_raspberry_pi; then
     # file or directory" otherwise). python3-lgpio gives system Python a
     # ready-made copy so pip usually doesn't have to build it at all.
     sudo apt-get -y install swig liblgpio-dev python3-dev python3-lgpio
-    sudo pip3 install rpi_ws281x adafruit-circuitpython-neopixel $BREAK_SYSTEM_PACKAGES
-    sudo python3 -m pip install --force-reinstall adafruit-blinka $BREAK_SYSTEM_PACKAGES
+    # Plain install, never --force-reinstall: with --break-system-packages
+    # that made pip tear out apt-managed modules (lgpio, RPi.GPIO, pyserial,
+    # typing_extensions ...) and die half-way with "uninstall-no-record-file".
+    sudo pip3 install rpi_ws281x adafruit-circuitpython-neopixel adafruit-blinka $BREAK_SYSTEM_PACKAGES
 fi
 deactivate
 
