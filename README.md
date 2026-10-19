@@ -351,6 +351,12 @@ complete library: SRD from the API, homebrew from the archive, media from
 YouTube.
 - **Create Backup** on the Utilities page (download/delete from the list
   there), or enable the **nightly automatic snapshot** (keeps the last 7).
+- **Utilities → Downloads → Download all music / videos** is the media half of
+  a rebuild: one zip per kind holding every file under its exact on-disk
+  filename (the YouTube id, or the typed name for old imports). Unzip the
+  `music/` and `video/` folders into `~/Music/SP/` and `~/Videos/SP/` on the
+  new box *before* **Import → Replace** and the restore finds every file by
+  name, marks it downloaded, and nothing is fetched again.
 - **Import → Replace** — full restore for disaster recovery or moving to a new
   box. A safety snapshot of the current state is taken first, media paths are
   rewritten for the new machine, and missing files re-download automatically.
