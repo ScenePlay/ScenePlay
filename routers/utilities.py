@@ -521,7 +521,7 @@ def asset_download_media(kind: str, media_id: int, _=Depends(require_dm_or_signe
     r = _media_row(kind, media_id)
     if not r['exists']:
         raise ApiError(404, 'not found')
-    return FileResponse(os.path.join(r['dir'], r['file']), filename=os.path.basename(inv.arc_name(r, kind)))
+    return FileResponse(os.path.join(r['dir'], r['file']), filename=r['file'])
 
 
 @open_router.get('/assets/download/picture/{folder}/{name}')

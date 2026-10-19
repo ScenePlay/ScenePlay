@@ -24,7 +24,7 @@ export async function mount(outlet, ctx) {
   const d = await api.get('/api/v1/library/assets');
   render(outlet, html`<style>${raw(CSS)}</style><div class="sp-page sp-assets">
     <div class="sp-page-head"><h1>Downloads</h1><a href="/utilities" style="font-size:.85em;">&larr; Utilities</a></div>
-    <p class="muted" style="font-size:.85em;margin:4px 0 10px;">Everything stored on this box. Music and video are listed by the title yt-dlp reported (your typed name, then the filename, when there is none); the download keeps that title as the filename. Zips are streamed, so a large library starts downloading right away.</p>
+    <p class="muted" style="font-size:.85em;margin:4px 0 10px;">Everything stored on this box. Music and video are listed by the title yt-dlp reported (your typed name, then the filename, when there is none); downloads keep the exact filename stored in the database, so a file lands with the same name it has on the box. Zips are streamed, so a large library starts downloading right away.</p>
     ${mediaCard('Music', 'music', d.music, d.totals.music, d.zip_urls.music)}
     ${mediaCard('Videos', 'video', d.video, d.totals.video, d.zip_urls.video)}
     <details class="sp-card" open><summary><h3>Pictures <span class="muted" style="font-weight:normal;font-size:.75em;">— ${d.totals.pictures.count} file${d.totals.pictures.count === 1 ? '' : 's'}, ${d.totals.pictures.bytes_h}</span></h3></summary>

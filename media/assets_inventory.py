@@ -2,7 +2,8 @@
 
 Pure module (no Flask): lists what's actually on disk for music, video and
 the uploaded pictures, joined to the metadata the app knows about them, so
-the DM can pull files off the box one at a time or as a zip.
+the DM can pull files off the box one at a time or as a zip. Downloads keep
+the exact on-disk filename from the database; titles are labels only.
 
 Music/video rows come from tblMusic / tblVideoMedia (finished downloads
 only) joined to tblMediaMetadata — the yt-dlp title/uploader/duration is the
@@ -213,9 +214,7 @@ def zip_stream(entries):
 
 
 def arc_name(row, kind):
-    """Zip entry name for a media row: the metadata title as the filename,
-    the real extension kept, filesystem-unfriendly characters scrubbed."""
-    ext = os.path.splitext(row['file'])[1]
-    label = row['name'] or os.path.splitext(row['file'])[0]
-    clean = ''.join(ch if ch not in '\\/:*?"<>|' else '_' for ch in label).strip() or 'media'
-    return f'{kind}/{clean[:120]}{ext}'
+    """Zip entry name for a media row: the exact filename stored in
+    tblMusic / tblVideoMedia (the video id on disk, underscores and all),
+    under a per-kind folder. The metadata title is for display only."""
+    return f"{kind}/{os.path.basename(row['file'])}"

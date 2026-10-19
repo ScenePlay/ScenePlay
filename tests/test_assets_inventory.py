@@ -56,10 +56,13 @@ class TestMedia:
         t = inv.totals(inv.media_rows(env['db'], 'music'))
         assert t == {'count': 1, 'missing': 1, 'bytes': 2048, 'bytes_h': '2.0 KB'}
 
-    def test_arc_name_uses_title_keeps_ext_scrubs(self, env):
+    def test_arc_name_is_the_exact_database_filename(self, env):
+        """Downloads keep the on-disk name from tblMusic/tblVideoMedia byte for
+        byte (the video id, underscores included) — never the metadata title."""
         r = {x['id']: x for x in inv.media_rows(env['db'], 'music')}[1]
         r['name'] = 'D&D: "Fight" / Loop?'
-        assert inv.arc_name(r, 'music') == 'music/D&D_ _Fight_ _ Loop_.mp3'
+        r['file'] = 'oxL_xY0Tm2w.mp3'
+        assert inv.arc_name(r, 'music') == 'music/oxL_xY0Tm2w.mp3'
 
 
 class TestPictures:
