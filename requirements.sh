@@ -74,9 +74,11 @@ if is_raspberry_pi; then
 fi
 deactivate
 
-chmod +x *.sh
-chmod +x ~/ScenePlay/supportFiles/*.sh
-chmod +x ~/ScenePlay/processMedia/*.sh
+# Every shell script the app or the DM runs — git on Windows/exFAT checkouts
+# and the zip download drop the executable bit. media/mpv.sh is the video
+# player: without +x the video worker cannot start mpv at all.
+chmod +x ~/ScenePlay/*.sh ~/ScenePlay/media/*.sh ~/ScenePlay/ops/*.sh ~/ScenePlay/scripts/*.sh \
+         ~/ScenePlay/supportFiles/*.sh ~/ScenePlay/processMedia/*.sh 2>/dev/null
 
 printf "Setup AutoStart\n"
 cd ~/ScenePlay/supportFiles

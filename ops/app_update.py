@@ -214,8 +214,11 @@ def run_update(sudo_password=None):
                  'sudo bash supportFiles/fixNginxUploadSize.sh')
         else:
             step('nginx upload-size fix (best-effort)', out or err)
-        # 6. new shell scripts must stay executable
-        _run(['bash', '-c', 'chmod +x *.sh supportFiles/*.sh 2>/dev/null'])
+        # 6. new shell scripts must stay executable — every folder that holds
+        # one (media/mpv.sh is the video player; a non-executable copy means
+        # video starts with no mpv at all)
+        _run(['bash', '-c', 'chmod +x *.sh media/*.sh ops/*.sh scripts/*.sh '
+                            'supportFiles/*.sh processMedia/*.sh 2>/dev/null'])
 
     log.append('Update complete — restarting ScenePlay…')
     return {'ok': True, 'log': log}
