@@ -24,7 +24,7 @@ ext:
 # Development instance beside a live box: other port, scratch DB, no
 # workers/integrations, never writes the crontab, own mpv socket prefix.
 dev:
-	SP_PORT=8086 SP_WORKERS=0 SP_INTEGRATIONS=0 SP_CRON_APPLY=0 \
+	SP_PORT=8087 SP_WORKERS=0 SP_INTEGRATIONS=0 SP_CRON_APPLY=0 \
 	SP_MPV_SOCKET_PREFIX=/tmp/mpvsocket-dev- $(PY) ws.py --dev
 
 serve:

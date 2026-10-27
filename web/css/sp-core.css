@@ -417,12 +417,17 @@ details > summary::-webkit-details-marker { color: var(--sp-accent); }
 }
 
 /* ── 5. Grid.js theme ────────────────────────────────────────────────────
-   mermaid.min.css (Grid.js's stock theme slot) loads before this file and
-   hardcodes light grays — keep !important so load order can't regress.     */
+   /vendor/gridjs-mermaid.min.css (Grid.js's stock theme) loads before this
+   file and hardcodes light grays — keep !important so load order can't
+   regress. The FEEL is the 1.x table: the theme's own roomy cells
+   (12px 24px, 14px 24px heads, 1px lines), 16px text, a quiet gray header
+   band, plain white rows. Only colors are re-pointed at the theme vars so
+   the dark themes still work.                                              */
 
 .gridjs-container {
   color: var(--sp-text) !important;
   background-color: transparent !important;
+  font-size: 1rem;                      /* 16px cells, as 1.x — not the 15px body */
 }
 .gridjs-wrapper {
   border: 1px solid var(--sp-border) !important;
@@ -435,16 +440,14 @@ details > summary::-webkit-details-marker { color: var(--sp-accent); }
 }
 
 th.gridjs-th {
-  background-color: var(--sp-primary) !important;
-  color: var(--sp-heading) !important;
+  background-color: var(--sp-surface-2) !important;   /* quiet gray band, not the chrome tint */
+  color: var(--sp-muted) !important;
   border-color: var(--sp-border) !important;
   font-weight: 600 !important;
-  font-size: .85rem !important;
-  letter-spacing: .02em !important;
 }
 th.gridjs-th-sort:hover,
 th.gridjs-th-sort:focus {
-  background-color: color-mix(in srgb, var(--sp-accent) 12%, var(--sp-primary)) !important;
+  background-color: color-mix(in srgb, var(--sp-accent) 10%, var(--sp-surface-2)) !important;
   color: var(--sp-heading) !important;
 }
 
@@ -453,9 +456,6 @@ td.gridjs-td {
   background-color: var(--sp-surface) !important;
   color: var(--sp-text) !important;
   border-color: var(--sp-border) !important;
-}
-.gridjs-tr:nth-child(even) td.gridjs-td {
-  background-color: var(--sp-surface-2) !important;
 }
 .gridjs-tr:hover td.gridjs-td {
   background-color: color-mix(in srgb, var(--sp-accent) 8%, var(--sp-surface)) !important;
@@ -605,6 +605,15 @@ details.sp-card > *:last-child { margin-bottom: 12px; }
 @media (max-width: 640px) {
   .sp-grid-actions { margin-left: 0; width: 100%; }
 }
+
+/* The theme fixes column widths (table-layout: fixed); anything inside a
+   cell must shrink to it instead of spilling into the next column. */
+td.gridjs-td .sp-picker-btn { max-width: 100%; }
+td.gridjs-td .sp-cell-select { max-width: 100%; }
+/* ...and a table whose column widths add up to more than the card grows
+   past it and scrolls sideways (the theme caps it at 100%, which crushed
+   every column of the 13-column media tables instead). */
+table.gridjs-table { max-width: none !important; }
 
 /* Horizontal-scroll shell for wide tables */
 .sp-table-scroll {

@@ -47,6 +47,7 @@ export async function mountTable(outlet, ctx, cfg) {
     if (c.id) colIndex[c.id] = i;
     const col = { id: c.id || `_c${i}`, name: c.name || c.id || '', sort: c.sort !== undefined ? c.sort : !!c.id };
     if (c.hidden) col.hidden = true;
+    if (c.width) col.width = c.width;       // fixed-layout tables: give wide content its room
     const rowId = row => row.cells[0].data;
     const cellVal = (row, id) => { const j = colIndex[id]; return j === undefined ? undefined : row.cells[j].data; };
     switch (c.cell) {

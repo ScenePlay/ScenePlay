@@ -139,3 +139,17 @@ def test_producer_console_route_and_modules(client, dm_token):
         assert __import__('os').path.exists(f), f
     routes = open('web/app/routes.js', encoding='utf-8').read()
     assert "path: '/ttrpg/producer'" in routes and "bodyClass: 'producer'" in routes
+
+
+def test_gridjs_theme_loads_before_sp_core():
+    """The Grid.js stock theme (mermaid.min.css) is what gives every table its
+    header band, sort arrows, cell padding and row lines. 1.x loaded it from
+    static/css; the SPA shell must ship it under /vendor and load it BEFORE
+    sp-core.css, whose overrides assume they come second."""
+    html = _read(os.path.join(WEB, 'index.html'))
+    refs = re.findall(r'href="(/[^"]+\.css)"', html)
+    assert '/vendor/gridjs-mermaid.min.css' in refs
+    assert refs.index('/vendor/gridjs-mermaid.min.css') < refs.index('/css/sp-core.css')
+    css = _read(os.path.join(WEB, 'vendor', 'gridjs-mermaid.min.css'))
+    for cls in ('.gridjs-sort-asc', '.gridjs-sort-desc', '.gridjs-sort-neutral', 'th.gridjs-th', 'td.gridjs-td'):
+        assert cls in css, cls

@@ -7,7 +7,7 @@ export default {
   cells: [
     { id: 'musicScene_ID', hidden: true },
     { id: 'scene_ID', name: 'Scenes', cell: 'select', lookup: 'scenes', lazy: true, sort: false },
-    { id: 'song_ID', name: 'Song', cell: 'mediaPicker', lookup: 'songs', sort: false },
+    { id: 'song_ID', name: 'Song', cell: 'mediaPicker', lookup: 'songs', sort: false, width: '36%' },
     { id: 'orderBy', name: 'orderBy', cell: 'text' },
     { id: 'volume', name: 'Volume 0-100', cell: 'text', sort: false },
     { id: 'loops', name: 'Loops 0-9999', cell: 'text', sort: false },

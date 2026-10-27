@@ -1,6 +1,7 @@
 # Dev instance for testing (side-by-side with the live Flask box)
 
-**Running now:** http://10.0.4.33:8086 (also http://127.0.0.1:8086 on this machine)
+**Ports:** the live appliance owns **8086**. A test instance (`make dev`) runs beside it on **8087** —
+http://127.0.0.1:8087 — for as long as a check takes, then gets stopped. Never start a second server on 8086.
 
 - Login (DM): username `yllonnoce`, password `x`
 - Database: a COPY of the real ScenePlay.db (`<scratchpad>/live/real.db`) — nothing you do here touches the live box.
@@ -17,7 +18,7 @@ cron / server tables. See docs/SPA_PARITY.md for the per-page list.
 ```bash
 cd /mnt/Transfer/5FD1E1415AC80F29/dev/ScenePlay
 for p in $(pgrep -f "[w]s.py --no-w"); do kill $p; done
-SP_PORT=8086 SP_WORKERS=0 SP_INTEGRATIONS=0 SP_CRON_APPLY=0 \
+SP_PORT=8087 SP_WORKERS=0 SP_INTEGRATIONS=0 SP_CRON_APPLY=0 \
 SP_DB_PATH=<scratchpad>/live/real.db SP_MPV_SOCKET_PREFIX=/tmp/mpvsocket-dev- \
 nohup .venv/bin/python ws.py --no-workers > <scratchpad>/live/server.log 2>&1 &
 ```
