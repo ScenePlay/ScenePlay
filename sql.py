@@ -416,6 +416,20 @@ def select_Meta_Que_Next():
     return data
 
 
+def clear_media_thumbnail(media_type, media_id):
+    """Forget a thumbnail URL that is definitely gone (YouTube answered 404
+    for a removed video). An empty URL drops the row out of the thumbnail
+    backfill's query for good — the fix for the boot-time retry spam — and
+    the UI shows its placeholder instead of a broken hotlink."""
+    conn = sqlite3.connect(database)
+    c = conn.cursor()
+    c.execute("UPDATE tblMediaMetadata SET thumbnail = '' WHERE media_type = ? AND media_id = ?",
+              (media_type, media_id))
+    conn.commit()
+    c.close()
+    conn.close()
+
+
 def upsert_media_metadata(media_type, media_id, fields):
     """Create-or-update the tblMediaMetadata row for (media_type, media_id).
     `fields` is a dict of column -> value (promoted columns / raw_json /

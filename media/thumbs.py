@@ -53,8 +53,18 @@ class ThumbnailStore:
 
     def cache(self, media_type, media_id, remote_url, timeout=20):
         """Download `remote_url`, shrink, save atomically. True on success."""
+        return self.cache_result(media_type, media_id, remote_url, timeout) == 'ok'
+
+    GONE_STATUSES = (404, 410)
+
+    def cache_result(self, media_type, media_id, remote_url, timeout=20):
+        """Like cache(), but says WHY it failed: 'ok', 'gone' or 'retry'.
+        'gone' = the server answered 404/410, i.e. the picture no longer exists
+        (YouTube removed the video) — the caller may forget the URL for good.
+        Everything else ('retry': 5xx, bad image, no network, empty URL) may
+        succeed later, so an offline Pi never loses a perfectly good URL."""
         if not remote_url:
-            return False
+            return 'retry'
         try:
             resp = requests.get(remote_url, timeout=timeout)
             resp.raise_for_status()
@@ -68,10 +78,16 @@ class ThumbnailStore:
             tmp = target + '.tmp'
             img.save(tmp, 'JPEG', quality=self.quality, optimize=True)
             os.replace(tmp, target)
-            return True
+            return 'ok'
+        except requests.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status in self.GONE_STATUSES:
+                return 'gone'
+            print(f'[thumbs] cache failed for {media_type}/{media_id}: {e}')
+            return 'retry'
         except Exception as e:
             print(f'[thumbs] cache failed for {media_type}/{media_id}: {e}')
-            return False
+            return 'retry'
 
 
 store = ThumbnailStore()

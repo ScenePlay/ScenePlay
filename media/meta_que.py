@@ -210,8 +210,15 @@ def backfill_one_thumbnail():
         key = (media_type, media_id)
         if key in _thumb_failed or thumb_store.exists(media_type, media_id):
             continue
-        if not thumb_store.cache(media_type, media_id, remote_url):
-            _thumb_failed.add(key)
+        result = thumb_store.cache_result(media_type, media_id, remote_url)
+        if result == 'gone':
+            # The video was removed from YouTube: no size of this picture
+            # exists any more. Blank the URL so no run — now or after a
+            # restart — ever asks for it again (the query above skips '').
+            sql.clear_media_thumbnail(media_type, media_id)
+            print(f'[thumbs] {media_type}/{media_id}: picture gone from YouTube (404) — forgotten, will not retry')
+        elif result != 'ok':
+            _thumb_failed.add(key)        # offline / 5xx: try again next restart
         return True
     _thumb_next_scan = time.time() + THUMB_RESCAN_SECONDS
     return False

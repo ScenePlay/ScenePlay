@@ -25,7 +25,21 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status != 200:
-            raise RuntimeError(f'HTTP {self.status}')
+            # Same shape as a real requests failure: the store reads
+            # err.response.status_code to tell "gone" from "try later".
+            err = thumbs.requests.HTTPError(f'HTTP {self.status}')
+            err.response = self
+            raise err
+
+    @property
+    def status_code(self):
+        return self.status
+
+
+class FakeOffline:
+    """requests.get stand-in for a box with no network."""
+    def __init__(self, url):
+        raise thumbs.requests.ConnectionError('no route to host')
 
 
 @pytest.fixture()
@@ -65,6 +79,24 @@ class TestStore:
         store._responses['https://x/junk.png'] = FakeResponse(b'not an image')
         assert store.cache('music', 1, 'https://x/junk.png') is False
         assert not store.exists('music', 1)    # no partial file left behind
+
+    def test_cache_result_tells_gone_from_retry(self, store, monkeypatch):
+        """A definite 404/410 means the picture no longer exists at YouTube
+        (the video was removed): 'gone'. Anything else — 5xx, bad image,
+        offline — is 'retry' so an offline Pi never discards a good URL."""
+        store._responses['https://x/404.png'] = FakeResponse(b'', status=404)
+        store._responses['https://x/410.png'] = FakeResponse(b'', status=410)
+        store._responses['https://x/500.png'] = FakeResponse(b'', status=500)
+        store._responses['https://x/junk.png'] = FakeResponse(b'not an image')
+        store._responses['https://x/ok.png'] = FakeResponse(png_bytes(50, 50))
+        assert store.cache_result('music', 1, 'https://x/404.png') == 'gone'
+        assert store.cache_result('music', 1, 'https://x/410.png') == 'gone'
+        assert store.cache_result('music', 1, 'https://x/500.png') == 'retry'
+        assert store.cache_result('music', 1, 'https://x/junk.png') == 'retry'
+        assert store.cache_result('music', 1, '') == 'retry'
+        assert store.cache_result('music', 1, 'https://x/ok.png') == 'ok'
+        monkeypatch.setattr(thumbs.requests, 'get', lambda url, timeout=0: FakeOffline(url))
+        assert store.cache_result('music', 2, 'https://x/ok.png') == 'retry'
 
 
 class TestBackfill:
@@ -109,3 +141,38 @@ class TestBackfill:
         assert meta_que.backfill_one_thumbnail() is True    # moves ON to music/2
         assert env.exists('music', 2)
         assert ('music', 1) in meta_que._thumb_failed
+
+    def _url_in_db(self, media_id):
+        import sql
+        conn = sqlite3.connect(sql.database)
+        try:
+            return conn.execute("SELECT thumbnail FROM tblMediaMetadata WHERE media_type='music' "
+                                "AND media_id=?", (media_id,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_gone_url_is_cleared_so_no_boot_ever_retries_it(self, env):
+        """The data that drove the boot-time '[thumbs] cache failed ... 404'
+        spam: a thumbnail URL for a video YouTube has removed. A definite 404
+        blanks the column, so the sweep's query (thumbnail <> '') never picks
+        the row again — not this run, not after a restart."""
+        import media.meta_que as meta_que
+        env._responses['https://x/1.png'] = FakeResponse(b'', status=404)
+        assert meta_que.backfill_one_thumbnail() is True    # attempted music/1: gone
+        assert self._url_in_db(1) == ''
+        assert ('music', 1) not in meta_que._thumb_failed, 'nothing to remember — the DB says so now'
+        assert meta_que.backfill_one_thumbnail() is True    # music/2 as usual
+        meta_que._thumb_failed.clear()                       # "restart"
+        meta_que._thumb_next_scan = 0.0
+        assert meta_que.backfill_one_thumbnail() is False   # nothing left to try
+
+    def test_retryable_failure_keeps_the_url(self, env, monkeypatch):
+        """5xx or no network must NOT blank the URL: the picture may well exist."""
+        import media.meta_que as meta_que
+        env._responses['https://x/1.png'] = FakeResponse(b'', status=500)
+        assert meta_que.backfill_one_thumbnail() is True
+        assert self._url_in_db(1) == 'https://x/1.png'
+        monkeypatch.setattr(thumbs.requests, 'get', lambda url, timeout=0: FakeOffline(url))
+        assert meta_que.backfill_one_thumbnail() is True    # music/2 offline
+        assert self._url_in_db(2) == 'https://x/2.png'
+        assert ('music', 2) in meta_que._thumb_failed
