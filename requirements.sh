@@ -71,6 +71,21 @@ if is_raspberry_pi; then
     # that made pip tear out apt-managed modules (lgpio, RPi.GPIO, pyserial,
     # typing_extensions ...) and die half-way with "uninstall-no-record-file".
     sudo pip3 install rpi_ws281x adafruit-circuitpython-neopixel adafruit-blinka $BREAK_SYSTEM_PACKAGES
+    # Raspberry Pi 5: its RP1 chip broke the rpi_ws281x (PWM/DMA) path, so the
+    # strip is driven through the RP1 PIO block instead — Adafruit's Blinka
+    # Pi 5 driver plugs into the same neopixel.NeoPixel() call led_Run.py
+    # already makes. The kernel exposes PIO as /dev/pio0 only on current
+    # firmware; ScenePlay refuses to drive LEDs on a Pi 5 until it exists.
+    if grep -q "Raspberry Pi 5" /proc/cpuinfo 2>/dev/null; then
+        sudo pip3 install --pre adafruit-blinka-raspberry-pi5-neopixel $BREAK_SYSTEM_PACKAGES
+        if [ -e /dev/pio0 ]; then
+            printf "Raspberry Pi 5: PIO device /dev/pio0 present — LED output enabled.\n"
+        else
+            printf "\nRaspberry Pi 5: /dev/pio0 is MISSING, so LEDs stay off until the firmware is current.\n"
+            printf "  Run:  sudo apt update && sudo apt full-upgrade -y && sudo rpi-eeprom-update -a && sudo reboot\n"
+            printf "  then check:  ls -l /dev/pio0\n\n"
+        fi
+    fi
 fi
 deactivate
 

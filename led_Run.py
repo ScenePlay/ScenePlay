@@ -1177,8 +1177,21 @@ def main():
     if pixel_pin is None:
         print(f'led_Run: GPIO pin {pin} is not a board pin')
         return
-    pixels = neopixel.NeoPixel(pixel_pin, count, brightness=cap, auto_write=False,
-                               pixel_order=neopixel.GRB)
+    try:
+        pixels = neopixel.NeoPixel(pixel_pin, count, brightness=cap, auto_write=False,
+                                   pixel_order=neopixel.GRB)
+    except Exception as e:          # noqa: BLE001 — one clear line beats a traceback in the service log
+        hint = ''
+        try:
+            if 'Raspberry Pi 5' in open('/proc/cpuinfo').read():
+                hint = (' — on a Raspberry Pi 5 this needs the Blinka Pi 5 PIO driver '
+                        '(sudo pip3 install --pre adafruit-blinka-raspberry-pi5-neopixel '
+                        '--break-system-packages) and /dev/pio0 (current firmware: '
+                        'sudo rpi-eeprom-update -a, reboot)')
+        except OSError:
+            pass
+        print(f'led_Run: cannot open the LED strip on GPIO {pin}: {e}{hint}')
+        return
     run(Strip(pixels, count, cap), take_payload())
 
 
