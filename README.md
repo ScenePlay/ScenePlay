@@ -264,9 +264,9 @@ per-item from the scene link settings.
   A scene's rows play in order and repeat until the scene changes; rows that
   share an order play in random order each pass. **Raspberry Pi 5:** the strip
   is driven through the RP1 PIO block (Adafruit's Blinka Pi 5 driver, installed
-  by `requirements.sh`), which needs current firmware — LEDs stay off until
-  `/dev/pio0` exists. If it is missing: `sudo apt full-upgrade -y && sudo
-  rpi-eeprom-update -a && sudo reboot`. Pi 3/4/Zero 2 keep the classic path.
+  by `requirements.sh`), which needs a current Raspberry Pi OS kernel — LEDs
+  stay off until `/dev/pio0` exists. If it is missing: `sudo apt update && sudo
+  apt full-upgrade -y && sudo reboot`. Pi 3/4/Zero 2 keep the classic path.
 - **Lights off at scene end** — when a scene's last song and video have
   played, every light (RPiLED, Remote boxes, WLED, remote players') goes
   dark. Utilities → Lighting turns this off; scenes with no media are never

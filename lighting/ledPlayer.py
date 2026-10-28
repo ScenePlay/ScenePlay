@@ -11,8 +11,8 @@ from pathlib import Path
 CPUINFO = Path('/proc/cpuinfo')
 PIO_DEV = Path('/dev/pio0')     # RP1 PIO block — the Pi 5's only NeoPixel route
 PI5_FIRMWARE_HINT = ('LEDs are off on this Raspberry Pi 5: /dev/pio0 is missing. NeoPixels on a '
-                     'Pi 5 run through the RP1 PIO block, which needs current firmware — run '
-                     '"sudo apt full-upgrade -y && sudo rpi-eeprom-update -a" and reboot, then '
+                     'Pi 5 run through the RP1 PIO block, which needs a current Raspberry Pi OS '
+                     'kernel — run "sudo apt update && sudo apt full-upgrade -y" and reboot, then '
                      'check "ls -l /dev/pio0". (requirements.sh installs the Pi 5 driver itself.)')
 
 

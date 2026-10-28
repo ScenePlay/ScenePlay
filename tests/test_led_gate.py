@@ -25,7 +25,7 @@ def test_pi5_without_pio_is_refused_with_reason(tmp_path, monkeypatch):
     cpu = _cpuinfo(tmp_path, 'Raspberry Pi 5 Model B Rev 1.0')
     assert lp.is_raspberry_pi(cpuinfo=cpu, pio_dev=tmp_path / 'missing-pio0') is False
     why = lp.led_unavailable_reason(cpuinfo=cpu, pio_dev=tmp_path / 'missing-pio0')
-    assert '/dev/pio0' in why and 'rpi-eeprom-update' in why
+    assert '/dev/pio0' in why and 'apt full-upgrade' in why
 
 
 def test_pi5_with_pio_is_allowed(tmp_path, monkeypatch):
