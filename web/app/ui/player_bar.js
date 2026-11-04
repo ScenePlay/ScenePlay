@@ -6,6 +6,7 @@ import { store } from '../store.js';
 import { sse } from '../sse.js';
 import { api } from '../api.js';
 import { fmtQueueDur } from '../lib/format.js';
+import { showMediaMeta } from './media_meta.js';
 
 let _offs = [];
 
@@ -98,7 +99,7 @@ export async function mountPlayerBar(el) {
   for (const id of ['npSongThumb', 'npVideoThumb']) {
     const img = el.querySelector('#' + id);
     img.addEventListener('error', () => { img.dataset.err = img.src; img.style.display = 'none'; });
-    img.addEventListener('click', () => { if (window.showMediaMeta) window.showMediaMeta(img.dataset.mtype, img.dataset.mid); });
+    img.addEventListener('click', () => { if (img.dataset.mid) showMediaMeta(img.dataset.mtype, img.dataset.mid); });
   }
   _offs.push(sse.subscribe('nowplaying', applyNowPlaying, { fallback: { every: 4000, fetch: () => api.get('/api/nowplaying', { quiet: true }) } }));
   _offs.push(sse.subscribe('queue', applyCounts, { fallback: { every: 5000, fetch: () => api.get('/api/songandvideocount', { quiet: true }) } }));
