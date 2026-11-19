@@ -1171,6 +1171,12 @@ def main():
         print('led_Run: no active tblLEDConfig row — nothing to drive')
         return
     pin, count, cap = cfg
+    # Blinka 10+ checks its Pi backends when `board` is imported and, on a
+    # TTY, stops at "Install them into the current Python environment? [Y/n]".
+    # This is a headless child of the app, so that question would land on the
+    # app's console and hang the strip. requirements.sh installs the backends;
+    # one the strip really needs still raises below when NeoPixel opens.
+    os.environ.setdefault('BLINKA_SKIP_DEPENDENCY_CHECK', '1')
     import board      # noqa: E402  (Pi-only; kept out of the testable module top)
     import neopixel   # noqa: E402
     pixel_pin = getattr(board, f'D{pin}', None)

@@ -71,6 +71,15 @@ if is_raspberry_pi; then
     # that made pip tear out apt-managed modules (lgpio, RPi.GPIO, pyserial,
     # typing_extensions ...) and die half-way with "uninstall-no-record-file".
     sudo pip3 install rpi_ws281x adafruit-circuitpython-neopixel adafruit-blinka $BREAK_SYSTEM_PACKAGES
+    # Blinka 10 stopped pulling its Pi backends in as install dependencies: it
+    # checks for them when `board` is imported and, on a console, stops at
+    # "Blinka detected missing or outdated platform dependencies ... [Y/n]".
+    # The PWM backend is the one nothing above brings in. The strip does not
+    # use it, so a failed install is not fatal (led_Run.py skips that check).
+    # gpiod is left to this package's own dependency so pip keeps the
+    # apt-managed python3-libgpiod instead of trying to replace it.
+    sudo pip3 install "adafruit-blinka-raspberry-pi-pwm>=1.0.2" $BREAK_SYSTEM_PACKAGES \
+        || printf "Note: adafruit-blinka-raspberry-pi-pwm did not install; NeoPixel LEDs do not need it.\n"
     # Raspberry Pi 5: its RP1 chip broke the rpi_ws281x (PWM/DMA) path, so the
     # strip is driven through the RP1 PIO block instead — Adafruit's Blinka
     # Pi 5 driver plugs into the same neopixel.NeoPixel() call led_Run.py

@@ -33,7 +33,10 @@ pytest~=9.1
 httpx~=0.28
 ruff~=0.15
 
-# Raspberry Pi / LED (install only on Pi hardware)
+# Raspberry Pi / LED — NOT installed from this file. led_Run.py runs under
+# system python via sudo, so requirements.sh installs these there, on a Pi only:
 # rpi_ws281x
 # adafruit-circuitpython-neopixel
 # adafruit-blinka
+# adafruit-blinka-raspberry-pi-pwm>=1.0.2    (Blinka 10 import check)
+# adafruit-blinka-raspberry-pi5-neopixel     (Pi 5 only, --pre)

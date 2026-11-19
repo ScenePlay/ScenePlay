@@ -59,5 +59,7 @@ def threaderLED():
         time.sleep(1 / 100)
     import core.config as _config
     script = os.path.join(_config.ROOT, 'led_Run.py')
-    subprocess.Popen(['sudo', 'python3', script])
+    # No stdin: led_Run is headless, so nothing it imports may stop to ask the
+    # app's console a question (Blinka 10's dependency prompt did).
+    subprocess.Popen(['sudo', 'python3', script], stdin=subprocess.DEVNULL)
     return True

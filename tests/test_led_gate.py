@@ -40,3 +40,56 @@ def test_non_pi_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(lp.platform, 'machine', lambda: 'x86_64')
     assert lp.is_raspberry_pi(cpuinfo=_cpuinfo(tmp_path, 'Raspberry Pi 5 Model B'), pio_dev=tmp_path / 'pio0') is False
     assert lp.is_raspberry_pi(cpuinfo=tmp_path / 'no-such-file', pio_dev=tmp_path / 'pio0') is False
+
+
+# --- Blinka 10 "Install them? [Y/n]" prompt ---------------------------------
+# Blinka 10 stopped installing its Pi backends as dependencies; it checks for
+# them when `board` is imported and, on a TTY, stops to ask. led_Run.py is a
+# headless child of the app, so nothing may ever wait on that question.
+
+def test_launcher_gives_led_run_no_stdin(monkeypatch):
+    import subprocess
+    calls = []
+
+    class _Done:
+        def poll(self):
+            return 0
+
+    def fake_popen(cmd, **kw):
+        calls.append((cmd, kw))
+        return _Done()
+
+    monkeypatch.setattr(lp, 'led_unavailable_reason', lambda: '')
+    monkeypatch.setattr(lp.subprocess, 'Popen', fake_popen)
+    assert lp.threaderLED() is True
+    cmd, kw = calls[-1]
+    assert cmd[-1].endswith('led_Run.py')
+    assert kw.get('stdin') is subprocess.DEVNULL
+
+
+def test_led_run_disables_blinka_prompt_before_importing_board(monkeypatch):
+    import os
+    import sys
+    import types
+
+    import pytest
+
+    import led_Run
+    seen = {}
+
+    class _BoardFinder:
+        # Records the env var at the moment `import board` actually runs.
+        def find_spec(self, name, path=None, target=None):
+            if name == 'board':
+                seen['skip'] = os.environ.get('BLINKA_SKIP_DEPENDENCY_CHECK')
+            return None
+
+    fake_neopixel = types.ModuleType('neopixel')
+    monkeypatch.delenv('BLINKA_SKIP_DEPENDENCY_CHECK', raising=False)
+    monkeypatch.delitem(sys.modules, 'board', raising=False)
+    monkeypatch.setitem(sys.modules, 'neopixel', fake_neopixel)
+    monkeypatch.setattr(sys, 'meta_path', [_BoardFinder()] + sys.meta_path)
+    monkeypatch.setattr(led_Run, 'active_config', lambda: (18, 4, 0.1))
+    with pytest.raises(ImportError):    # no real `board` off-Pi
+        led_Run.main()
+    assert seen['skip'] == '1'

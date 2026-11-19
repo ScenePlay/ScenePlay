@@ -1,6 +1,6 @@
 [project]
 name = "sceneplay"
-version = "2.0.41"
+version = "2.0.42"
 description = "Self-hosted atmosphere controller for tabletop gaming: music/video via mpv, LED lighting, TTRPG toolkit, remote-play relay and OBS control (FastAPI + SQLite + single-page app)"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -33,4 +33,5 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest~=9.1", "httpx~=0.28", "ruff~=0.15", "playwright"]
 # Raspberry Pi / LED hardware only
-pi = ["rpi_ws281x", "adafruit-circuitpython-neopixel", "adafruit-blinka"]
+pi = ["rpi_ws281x", "adafruit-circuitpython-neopixel", "adafruit-blinka",
+      "adafruit-blinka-raspberry-pi-pwm>=1.0.2"]

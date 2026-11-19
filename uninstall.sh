@@ -65,7 +65,8 @@ esac
 # --- Pi LED libraries (requirements.sh put them in SYSTEM python) -----------
 if is_raspberry_pi; then
     sudo pip3 uninstall -y rpi_ws281x adafruit-circuitpython-neopixel \
-        adafruit-blinka --break-system-packages 2>/dev/null
+        adafruit-blinka adafruit-blinka-raspberry-pi-pwm \
+        adafruit-blinka-raspberry-pi5-neopixel --break-system-packages 2>/dev/null
     echo "[ok] LED libraries removed from system python"
 fi
 
