@@ -3,7 +3,7 @@
 import logging
 import mimetypes
 import os
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,7 +27,7 @@ mimetypes.add_type('text/javascript', '.mjs')
 _NOT_SPA = ('/api', '/static', '/ttrpg/obs/', '/assets/', '/backups/', '/handouts/',
             '/activatescenes', '/receive_led_patterns', '/isAlive', '/killqueue',
             '/nextsong', '/nextvideo', '/set_volume', '/processyt', '/favicon.ico',
-            '/music_', '/video_', '/updateWLEDSupport', '/docs', '/openapi.json', '/redoc')
+            '/music_', '/video_', '/updateWLEDSupport', '/docs', '/openapi.json', '/redoc', '/mcp')
 _SPA_OK_FILE_PREFIXES = ('/handouts/', '/ttrpg/obs/feed/')   # SPA views under a non-SPA prefix
 
 
@@ -109,9 +109,18 @@ async def lifespan(app: FastAPI):
     if config.INTEGRATIONS and not getattr(app.state, 'testing', False):
         import core.boot as boot
         boot.start_integrations()
+    stack = AsyncExitStack()
+    mcp_srv = getattr(app.state, 'mcp', None)
+    if mcp_srv is not None:
+        # the MCP SDK's task group (/mcp answers only while it runs)
+        try:
+            await stack.enter_async_context(mcp_srv.session_manager.run())
+        except Exception as exc:
+            log.warning('MCP server not started: %s', exc)
     try:
         yield
     finally:
+        await stack.aclose()
         await hub.stop()
         if config.INTEGRATIONS and not getattr(app.state, 'testing', False):
             import core.boot as boot
@@ -181,6 +190,14 @@ def create_app(testing=False):
         except Exception:
             pass
         return {'ok': True, 'journal_mode': journal_mode, 'pid': os.getpid()}
+
+    # MCP (AI control of the music) — off until Utilities -> AI Control turns it on
+    try:
+        import integrations.mcp_server as mcp_server
+        mcp_server.attach(app)
+    except Exception as exc:
+        log.warning('MCP server not attached: %s', exc)
+        app.state.mcp = None
 
     # ── static + SPA ──
     app.mount('/static', StaticFiles(directory=config.STATIC_DIR), name='static')

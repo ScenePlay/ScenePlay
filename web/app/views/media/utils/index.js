@@ -1,6 +1,6 @@
 // Utilities page (templates/utils.html): cards for YouTube import, software
 // update, backup & restore, import, this server, access control, lighting,
-// AI settings, download queue + chimes, downloads, handouts, extensions.
+// AI settings, AI control (MCP), download queue + chimes, downloads, handouts, extensions.
 import { html, render, raw, esc } from '../../../lib/dom.js';
 import { api, ApiError } from '../../../api.js';
 import { toast } from '../../../ui/toast.js';
@@ -10,6 +10,20 @@ import { mountNetwork } from './network.js';
 export const title = 'Utilities';
 
 function card(title, body, id = '') { return html`<details class="sp-card" ${id ? raw(`id="${id}"`) : ''}><summary><h3>${title}</h3></summary>${body}</details>`; }
+
+function mcpCard(m) {
+  if (!m) return '';
+  if (!m.available) return html`<p style="margin:6px 0;">The MCP package is not installed on this box. Run <code>pip install "mcp~=2.3"</code> in ScenePlay's venv, then restart ScenePlay.</p>`;
+  const url = `${location.protocol}//${location.host}${m.path}`;
+  return html`
+    <p style="font-size:.85em;color:var(--sp-muted);margin:6px 0;">Lets an AI run the music by talking to it: Claude, a local Ollama chat app, or a 3D character in the 3dObject viewer. "Play jazz", "a bit quieter", "skip this", "make an 80s playlist". It uses the same music, volume and playlists as these pages. Off by default.</p>
+    <label style="display:block;margin:6px 0;"><input type="checkbox" id="mcp-on" ${m.enabled ? 'checked' : ''}> <b>Turn on AI control</b> &mdash; answers at <code>${url}</code></label>
+    <p style="margin:6px 0;font-size:.9em;">Token: ${m.has_token ? html`<b style="color:var(--sp-ok, #3c9a5f);">set</b>` : html`<b style="color:var(--sp-muted);">none yet</b> (made when you turn it on)`}
+      &nbsp;<button type="button" class="btn btn-sm btn-outline-secondary" id="mcp-token-new">${m.has_token ? 'Make a new token' : 'Make token'}</button></p>
+    <div id="mcp-token-out" style="display:none;margin:6px 0;"><p style="font-size:.85em;margin:2px 0;"><b>Copy it now: it is shown only this once.</b> Paste it into the AI app (or the 3dObject device form) as the token.</p>
+      <div style="display:flex;gap:6px;"><input type="text" readonly id="mcp-token-val" class="form-control form-control-sm" style="font-family:monospace;"><button type="button" class="btn btn-sm btn-secondary" id="mcp-token-copy">Copy</button></div></div>
+    <ul style="font-size:.85em;color:var(--sp-muted);margin:2px 0 6px 18px;"><li>Every call needs the token, even when DM-only ScenePlay is off.</li><li>Making a new token stops the old one at once.</li><li>Claude Code: <code>claude mcp add --transport http sceneplay ${url} --header "Authorization: Bearer &lt;token&gt;"</code></li><li>Keep it on your own network: never port-forward ScenePlay.</li></ul>`;
+}
 
 function page(d) {
   const isDm = d.is_dm;
@@ -105,6 +119,7 @@ function page(d) {
     <label style="font-size:.85em;display:block;margin:4px 0;"><b>Runware model</b> (AIR id)<input type="text" name="runware_model" value="${d.runware_model}" class="form-control form-control-sm" style="width:60%;"><span style="color:var(--sp-muted);">e.g. <code>runware:400@3</code> = FLUX.2 klein, <code>runware:101@1</code> = FLUX.1 Dev, <code>google:4@3</code> = Nano Banana 2 (Gemini image via Runware); any Runware or CivitAI image-model AIR id works.</span></label>
     <ul style="font-size:.85em;color:var(--sp-muted);margin:2px 0 6px 18px;"><li>Gemini images cost a few cents; Runware images cost fractions of a cent; a Veo video clip costs a few dollars and takes 1&ndash;6 minutes.</li><li>The defaults are the proven models; the newer ones are offered to try &mdash; if the provider rejects one, the error says so and you can switch back here.</li></ul>
     <button type="submit" class="btn btn-secondary">Save AI Settings</button></form>` : html`<p style="margin:6px 0;">${loginLink} to configure AI generation.</p>`)}
+  ${card('AI Control (MCP)', isDm ? mcpCard(d.mcp) : html`<p style="margin:6px 0;">${loginLink} to set up AI control.</p>`, 'mcp-card')}
   ${card('Download Queue', html`
     <p style="font-size:.85em;margin:6px 0;">What the YouTube downloader is doing right now, why anything failed, and the chimes it plays. Updates live while this card is open.</p>
     <div class="d-flex gap-4 flex-wrap" style="font-size:.9em;margin:6px 0 10px;">
@@ -172,6 +187,19 @@ export async function mount(outlet, ctx) {
     for (const [k, v] of new FormData(aiForm).entries()) body[k] = v;
     body.gemini_clear_key = !!aiForm.gemini_clear_key?.checked; body.runware_clear_key = !!aiForm.runware_clear_key?.checked;
     try { await act('/api/v1/utilities/ai-settings', body); ctx.reload(); } catch (x) {}
+  });
+  const showMcpToken = tok => { const out = $('#mcp-token-out'); if (!out || !tok) return; $('#mcp-token-val').value = tok; out.style.display = ''; };
+  const mcpOn = $('#mcp-on'); if (mcpOn) ctx.on(mcpOn, 'change', async e => {
+    try { const r = await act('/api/v1/mcp/settings', { enabled: e.target.checked }); showMcpToken(r.token); }
+    catch (x) { e.target.checked = !e.target.checked; }
+  });
+  const mcpNew = $('#mcp-token-new'); if (mcpNew) ctx.on(mcpNew, 'click', async () => {
+    if (d.mcp && d.mcp.has_token && !confirm('Make a new token? Every AI app using the old one stops working until you give it the new one.')) return;
+    try { const r = await act('/api/v1/mcp/token'); showMcpToken(r.token); mcpNew.textContent = 'Make a new token'; if (d.mcp) d.mcp.has_token = true; } catch (x) {}
+  });
+  const mcpCopy = $('#mcp-token-copy'); if (mcpCopy) ctx.on(mcpCopy, 'click', async () => {
+    const el = $('#mcp-token-val');
+    try { await navigator.clipboard.writeText(el.value); toast.success('Token copied.'); } catch (e) { el.select(); toast.info('Press Ctrl+C to copy.'); }
   });
   ctx.on($('#restart-computer'), 'click', async () => {
     if (!confirm('Are you sure you want to restart the computer? (Requires a DM login.)')) return;

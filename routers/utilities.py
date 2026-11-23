@@ -85,7 +85,45 @@ def page(user=Depends(get_current_user)):
         'image_provider': appsettingGet('image_provider', 'gemini') or 'gemini',
         'text_provider': appsettingGet('text_provider', 'gemini') or 'gemini',
         'runware_text_model': runware.resolve_text_model(),
+        'mcp': _mcp_state() if is_dm else None,
     }
+
+
+# ── AI control (MCP) ──────────────────────────────────────────────────────────
+
+def _mcp_state():
+    import integrations.mcp_server as mcp_server
+    return {'available': mcp_server.available(), 'enabled': mcp_server.enabled(),
+            'has_token': mcp_server.get_token() is not None, 'path': mcp_server.PATH,
+            'port': config.PORT}
+
+
+@router.post('/api/v1/mcp/settings')
+def mcp_settings(data: dict = Depends(json_body), user=Depends(require_dm)):
+    """{enabled: bool}. Turning it on the first time also makes the token,
+    returned once in `token`."""
+    import integrations.mcp_server as mcp_server
+    if not mcp_server.available():
+        raise ApiError(400, 'The MCP package is not installed on this box (pip install "mcp~=2.3").',
+                       code='mcp_missing')
+    on = bool(data.get('enabled'))
+    token = None
+    if on and mcp_server.get_token() is None:
+        token = mcp_server.new_token()
+    mcp_server.set_enabled(on)
+    out = {'ok': True, 'message': 'AI control (MCP) is on.' if on else 'AI control (MCP) is off.',
+           **_mcp_state()}
+    if token:
+        out['token'] = token
+    return out
+
+
+@router.post('/api/v1/mcp/token')
+def mcp_token(user=Depends(require_dm)):
+    """Make a new token (the old one stops working); shown this once."""
+    import integrations.mcp_server as mcp_server
+    return {'ok': True, 'token': mcp_server.new_token(),
+            'message': 'New MCP token made: the old one no longer works.', **_mcp_state()}
 
 
 # ── the old form actions, one JSON endpoint each ──────────────────────────────

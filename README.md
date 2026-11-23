@@ -400,6 +400,24 @@ YouTube import form, **Backfill Metadata** (tags legacy rows with video ids
 and queues them for metadata), **Backup &amp; Restore**, browser-extension
 downloads, and computer restart. (The network scan lives on the Servers page.)
 
+### AI control (MCP)
+Talk to the music: an AI app can play, skip, pause, change the volume and build playlists
+("play jazz", "a bit quieter", "make an 80s playlist"). It uses the same music, volume and
+playlists as these pages.
+
+- **Off by default.** Turn it on under **Utilities → AI Control (MCP)** (DM login). The
+  switch acts at once, with no restart.
+- **Token:** turning it on the first time makes one. It is shown **once**; **Make a new
+  token** stops the old one immediately. It lives only in `instance/mcp_token`.
+- **Address:** `http://<this box>:8086/mcp` (Streamable HTTP). Every call needs
+  `Authorization: Bearer <token>`.
+- **Clients:**
+  - Claude Code: `claude mcp add --transport http sceneplay http://<box>:8086/mcp --header "Authorization: Bearer <token>"`
+  - The 3dObject viewer's talking characters: Voice section → **ScenePlay** → **Devices**.
+- **Music only** unless asked: `play_music` changes the queue; `play_scene` is the one tool that also
+  changes the lights, video and OBS.
+- Keep it on your own network: never port-forward ScenePlay.
+
 ### Table management
 Every data table (Scenes, Scene Music/Video/RPiLED/WLED, Music/Video Media,
 Campaigns, LED Config, Servers, Cron Schedules) is browser
