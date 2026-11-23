@@ -50,4 +50,6 @@ sudo cp ~/ScenePlay/supportFiles/default.txt /etc/nginx/sites-available/default
 sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 sudo systemctl start nginx
 
-
+#Wi-Fi fallback hotspot (Raspberry Pi + NetworkManager only; the script
+# checks both and skips with a message otherwise)
+sudo bash ~/ScenePlay/supportFiles/setupNetwatch.sh

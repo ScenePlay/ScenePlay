@@ -5,6 +5,7 @@ import { html, render, raw, esc } from '../../../lib/dom.js';
 import { api, ApiError } from '../../../api.js';
 import { toast } from '../../../ui/toast.js';
 import { store } from '../../../store.js';
+import { mountNetwork } from './network.js';
 
 export const title = 'Utilities';
 
@@ -75,6 +76,7 @@ function page(d) {
     <div style="margin:6px 0;"><label for="restart-sudo" style="font-size:.85em;display:block;margin-bottom:2px;"><b>System (sudo) password — optional.</b> Needed only when this box's sudo prompts for a password; leave blank if reboots already work. Used once and never stored.</label>
       <input type="password" id="restart-sudo" autocomplete="new-password" class="form-control" placeholder="sudo password (optional)" style="max-width:260px;"></div>
     <button type="button" class="btn btn-danger" id="restart-computer" title="Requires a DM login">Restart Computer</button><br><br>`)}
+  ${card('Network & Hotspot', html`<div id="net-card"><p style="font-size:.85em;color:var(--sp-muted);">Loading…</p></div>`, 'net-card-wrap')}
   ${card('Access Control', html`
     <p style="font-size:.85em;color:var(--sp-muted);margin:6px 0;">Controls who can open the ScenePlay pages: the playback controls, the campaign / scene / media tables, and this Utilities page. The TTRPG player pages are never restricted.</p>
     ${isDm ? html`<label style="display:block;margin:6px 0;"><input type="checkbox" id="dm-only" ${d.dm_only_sceneplay ? 'checked' : ''}> <b>DM-only ScenePlay</b> — only DM logins can use the ScenePlay controls and tables.</label>`
@@ -133,6 +135,7 @@ function page(d) {
 export async function mount(outlet, ctx) {
   const d = await api.get('/api/v1/utilities');
   render(outlet, page(d));
+  mountNetwork(outlet.querySelector('#net-card'), ctx, !!d.is_dm).catch(e => console.error('network card', e));
   const $ = s => outlet.querySelector(s);
   const act = async (path, body, opts) => { const r = await api.post(path, body || null, opts); if (r && r.message) toast.success(r.message); return r; };
 

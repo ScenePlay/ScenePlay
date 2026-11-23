@@ -338,6 +338,28 @@ Login-based, with DM and player roles.
   characters and music are unaffected — this only concerns player-side
   lighting.
 
+### Wi-Fi setup hotspot (Raspberry Pi)
+Take the Pi somewhere new and it can't find a Wi-Fi it knows? About a minute
+after boot it opens its own **open** Wi-Fi network called **`ScenePlay-XXXX`**.
+
+1. Join `ScenePlay-XXXX` from your phone.
+2. The "sign in to network" popup opens the **Wi-Fi Setup** page. If it doesn't
+   pop up, browse to `http://10.42.0.1/setup/wifi`.
+3. Pick your network, type its password, press **Connect**.
+4. Put your phone back on your own Wi-Fi and open `http://<hostname>.local`.
+   If the password was wrong, the hotspot comes back within a minute with the error.
+
+- **Hotspot play mode** (Utilities → Network & Hotspot, DM): keep the hotspot up
+  on purpose so players' phones use ScenePlay directly where there is no Wi-Fi.
+  Optional WPA2 password; no internet or remote relay while it's on.
+- **Who can change networks:** anyone on the open fallback hotspot (a fresh box
+  has no logins yet); otherwise DM only.
+- **Ethernet** always wins: no hotspot while a cable is connected.
+- Saved Wi-Fi passwords stay in NetworkManager, never in ScenePlay's database or backups.
+- Needs Raspberry Pi OS **Bookworm or newer** (NetworkManager). Installed by the
+  installer, or on an existing box: `sudo bash ~/ScenePlay/supportFiles/setupNetwatch.sh`
+  (`--force` for a non-Pi Linux box). Service: `systemctl status sceneplay_netwatch`.
+
 ### Multi-server & discovery
 `GET /api/server-info` fingerprints a ScenePlay box (name, version,
 capabilities). *Utilities → Ping Network* scans the LAN for other ScenePlay

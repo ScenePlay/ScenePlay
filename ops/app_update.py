@@ -191,29 +191,34 @@ def run_update(sudo_password=None):
         return {'ok': False, 'log': log}
 
     if os.name != 'nt':
-        # 5. idempotent nginx upload-size fix (covers pull-only boxes that
-        #    predate it); best-effort — nginx may legitimately be absent.
+        # 5. idempotent server-setup steps that pull-only boxes would
+        #    otherwise never get: the nginx upload-size fix and the Wi-Fi
+        #    fallback hotspot service (Pi + NetworkManager only; the script
+        #    skips itself elsewhere). Best-effort — nginx may be absent.
         # sudo must NEVER prompt on the server's terminal (that leaves the
         # web request hanging on an invisible password prompt): -S reads the
         # password the web page supplied from stdin, -n fails fast instead
         # of prompting when no password was given.
-        script = os.path.join(REPO_ROOT, 'supportFiles',
-                              'fixNginxUploadSize.sh')
-        if sudo_password:
-            out, err = _run(['sudo', '-S', '-p', '', 'bash', script],
-                            timeout=60, input_text=sudo_password + '\n')
-        else:
-            out, err = _run(['sudo', '-n', 'bash', script], timeout=60)
-        if _sudo_blocked(out, err):
-            step('nginx upload-size fix SKIPPED — sudo needs your system '
-                 'password' + (' (the one entered was not accepted)'
-                               if sudo_password else '') + '.',
-                 'The update itself is unaffected. To apply this fix, enter '
-                 'your system password in the update box and run the update '
-                 'again, or run in a terminal: '
-                 'sudo bash supportFiles/fixNginxUploadSize.sh')
-        else:
-            step('nginx upload-size fix (best-effort)', out or err)
+        for script_name, title in (('fixNginxUploadSize.sh', 'nginx upload-size fix'),
+                                   ('setupNetwatch.sh', 'Wi-Fi fallback hotspot setup')):
+            script = os.path.join(REPO_ROOT, 'supportFiles', script_name)
+            if not os.path.isfile(script):
+                continue
+            if sudo_password:
+                out, err = _run(['sudo', '-S', '-p', '', 'bash', script],
+                                timeout=120, input_text=sudo_password + '\n')
+            else:
+                out, err = _run(['sudo', '-n', 'bash', script], timeout=120)
+            if _sudo_blocked(out, err):
+                step(f'{title} SKIPPED — sudo needs your system '
+                     'password' + (' (the one entered was not accepted)'
+                                   if sudo_password else '') + '.',
+                     'The update itself is unaffected. To apply this step, enter '
+                     'your system password in the update box and run the update '
+                     'again, or run in a terminal: '
+                     f'sudo bash supportFiles/{script_name}')
+            else:
+                step(f'{title} (best-effort)', out or err)
         # 6. new shell scripts must stay executable — every folder that holds
         # one (media/mpv.sh is the video player; a non-executable copy means
         # video starts with no mpv at all)

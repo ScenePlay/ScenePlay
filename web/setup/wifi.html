@@ -1,0 +1,212 @@
+<!doctype html>
+<!-- ScenePlay Wi-Fi setup: what a phone's "sign in to network" popup opens
+     while the fallback hotspot is up. Standalone on purpose (no SPA, no
+     modules, no external files): captive-portal mini-browsers are fussy,
+     and a fresh box has no DM account yet. API: routers/network.py. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScenePlay Wi-Fi Setup</title>
+<style>
+  :root { --bg:#f4f2ee; --card:#fff; --fg:#1d1b18; --muted:#6b665e; --accent:#8a4b1f; --line:#ddd6cb;
+          --ok:#1f6b3a; --okbg:#e3f3e8; --bad:#9b1c1c; --badbg:#fbe5e5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16140f; --card:#221f19; --fg:#efe9df; --muted:#a59d90; --accent:#e0a36b; --line:#3a352c;
+            --ok:#8fd8a8; --okbg:#173222; --bad:#f2a0a0; --badbg:#3a1a1a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:440px; margin:0 auto; padding:24px 16px 40px; }
+  h1 { font-size:1.35rem; margin:0 0 4px; color:var(--accent); }
+  .sub { color:var(--muted); margin:0 0 18px; font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:14px; }
+  label { display:block; font-weight:600; margin:12px 0 4px; font-size:.92rem; }
+  select, input[type=text], input[type=password] { width:100%; font-size:1rem; padding:10px; border:1px solid var(--line);
+          border-radius:8px; background:var(--bg); color:var(--fg); }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:.9rem; color:var(--muted); }
+  button, .btn { display:inline-block; width:100%; margin-top:16px; padding:12px; font-size:1rem; font-weight:600; border:0;
+          border-radius:8px; background:var(--accent); color:#fff; text-align:center; text-decoration:none; cursor:pointer; }
+  button:disabled { opacity:.55; }
+  .msg { border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:.93rem; }
+  .ok { background:var(--okbg); color:var(--ok); } .bad { background:var(--badbg); color:var(--bad); }
+  .muted { color:var(--muted); font-size:.88rem; }
+  ol { padding-left:20px; margin:8px 0 0; } li { margin:4px 0; }
+  code { font-size:.95em; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ScenePlay Wi-Fi Setup</h1>
+  <p class="sub" id="sub">Checking…</p>
+  <div id="error" class="msg bad" hidden></div>
+
+  <section class="card" id="setup" hidden>
+    <form id="form">
+      <label for="net">Wi-Fi network</label>
+      <select id="net"></select>
+      <div id="other-wrap" hidden>
+        <label for="ssid">Network name</label>
+        <input id="ssid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="off" placeholder="Leave blank for an open network">
+      <label class="row" style="font-weight:400"><input type="checkbox" id="show"> Show password</label>
+      <button type="submit" id="go">Connect</button>
+    </form>
+    <p class="muted" id="scan-note"></p>
+  </section>
+
+  <section class="card" id="switching" hidden>
+    <p><b>Switching to <span id="sw-ssid"></span>…</b></p>
+    <p class="muted">Your phone will drop off the <span class="hs-name"></span> hotspot now.</p>
+    <ol>
+      <li><b>If it worked:</b> put your phone back on <span id="sw-ssid2"></span>, then open
+        <a id="sw-link" href="#"></a>.</li>
+      <li><b>If it didn't:</b> the <span class="hs-name"></span> hotspot comes back within a minute.
+        Rejoin it and open this page again to see what went wrong.</li>
+    </ol>
+  </section>
+
+  <section class="card" id="info" hidden></section>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var st = null;
+  var OTHER = '\u0000other';
+
+  function get(path) {
+    return fetch(path, { cache: 'no-store' }).then(function (r) {
+      return r.json().then(function (j) { if (!r.ok) throw new Error(j && j.error || r.statusText); return j; });
+    });
+  }
+  function post(path, body) {
+    return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j && j.error || r.statusText); return j; }); });
+  }
+  function text(el, s) { el.textContent = s == null ? '' : String(s); }
+  function showError(s) { var e = $('error'); text(e, s); e.hidden = !s; }
+  function homeUrl(s) { return 'http://' + (s && s.hostname ? s.hostname + '.local' : 'sceneplay.local') + '/'; }
+  function bars(sig) { return sig >= 70 ? '▂▄▆█' : sig >= 45 ? '▂▄▆' : sig >= 20 ? '▂▄' : '▂'; }
+
+  function info(html) { var el = $('info'); el.innerHTML = html; el.hidden = false; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  function paint(s) {
+    st = s;
+    document.querySelectorAll('.hs-name').forEach(function (el) { text(el, s.hotspot_ssid || 'ScenePlay'); });
+    $('setup').hidden = true; $('info').hidden = true;
+    var la = s.last_attempt;
+    if (la && la.ok === false && la.error) showError('Could not join ' + la.ssid + ': ' + la.error);
+    else showError('');
+    if (!s.available) {
+      text($('sub'), 'Wi-Fi setup is not available here.');
+      info('<p>' + esc(s.reason || 'The network service is not running.') + '</p>');
+      return;
+    }
+    if (s.mode === 'hotspot') {
+      text($('sub'), 'This ScenePlay box could not find a Wi-Fi network it knows. Pick yours below.');
+      $('setup').hidden = false;
+      loadScan();
+      return;
+    }
+    if (s.mode === 'play') {
+      text($('sub'), 'Hotspot play mode is on.');
+      info('<p>Everyone on the <b>' + esc(s.hotspot_ssid) + '</b> hotspot can use ScenePlay directly (no internet).</p>'
+        + '<a class="btn" href="/">Open ScenePlay</a>'
+        + '<p class="muted">To change Wi-Fi, a DM can turn play mode off under Utilities → Network.</p>');
+      return;
+    }
+    if (s.mode === 'connecting') {
+      text($('sub'), 'Connecting to ' + (la && la.ssid || 'the network') + '…');
+      return;
+    }
+    if (s.mode === 'client') {
+      text($('sub'), 'ScenePlay is online.');
+      var where = s.wifi ? 'Wi-Fi <b>' + esc(s.wifi_ssid || s.wifi) + '</b>' : 'Ethernet';
+      info('<p>Connected over ' + where + (s.ip ? ' at <code>' + esc(s.ip) + '</code>' : '') + '.</p>'
+        + '<a class="btn" href="/">Open ScenePlay</a>'
+        + '<p class="muted">Changing networks from here needs a DM login: Utilities → Network.</p>');
+      return;
+    }
+    text($('sub'), s.mode === 'offline' ? 'No network, and the fallback hotspot is switched off.'
+      : 'Looking for a known Wi-Fi network…');
+  }
+
+  function loadScan() {
+    get('/api/v1/network/scan').then(function (r) {
+      var sel = $('net'), keep = sel.value;
+      sel.innerHTML = '';
+      (r.networks || []).forEach(function (n) {
+        var o = document.createElement('option');
+        o.value = n.ssid; o.dataset.security = n.security || '';
+        o.textContent = bars(n.signal) + '  ' + n.ssid + (n.security ? '  🔒' : '');
+        sel.appendChild(o);
+      });
+      var o = document.createElement('option');
+      o.value = OTHER; o.textContent = 'Other / hidden network…';
+      sel.appendChild(o);
+      if (keep) sel.value = keep;
+      if (!sel.value) sel.selectedIndex = 0;
+      onPick();
+      text($('scan-note'), (r.networks || []).length
+        ? 'Networks seen when the hotspot started. Not listed? Pick "Other" and type its name.'
+        : 'No networks were seen when the hotspot started. Pick "Other" and type the name.');
+    }).catch(function (e) { showError(e.message); });
+  }
+
+  function onPick() {
+    var other = $('net').value === OTHER;
+    $('other-wrap').hidden = !other;
+    var opt = $('net').selectedOptions[0];
+    $('pw').placeholder = other || (opt && opt.dataset.security) ? 'Wi-Fi password' : 'Open network: leave blank';
+  }
+
+  $('net').addEventListener('change', onPick);
+  $('show').addEventListener('change', function (e) { $('pw').type = e.target.checked ? 'text' : 'password'; });
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var other = $('net').value === OTHER;
+    var ssid = other ? $('ssid').value.trim() : $('net').value;
+    var opt = $('net').selectedOptions[0];
+    if (!ssid) { showError('Type the network name.'); return; }
+    $('go').disabled = true; showError('');
+    post('/api/v1/network/connect', { ssid: ssid, password: $('pw').value, hidden: other,
+      security: other ? '' : (opt && opt.dataset.security) || '' })
+      .then(function () {
+        $('setup').hidden = true;
+        text($('sw-ssid'), ssid); text($('sw-ssid2'), ssid);
+        var url = homeUrl(st); $('sw-link').href = url; text($('sw-link'), url.replace(/\/$/, ''));
+        $('switching').hidden = false;
+        text($('sub'), 'Connecting…');
+        poll();
+      })
+      .catch(function (x) { showError(x.message); })
+      .then(function () { $('go').disabled = false; });
+  });
+
+  var polling = false;
+  function poll() {
+    if (polling) return; polling = true;
+    (function loop() {
+      get('/api/v1/network/status').then(function (s) {
+        // the daemon picks the job up on its next tick (<= 5 s): until the
+        // attempt has an outcome, "hotspot" is the stale pre-connect state
+        var pending = s.last_attempt && s.last_attempt.ok === null;
+        if (s.mode === 'client' || s.mode === 'play' || (s.mode === 'hotspot' && !pending)) {
+          polling = false; $('switching').hidden = true; paint(s); return;
+        }
+        setTimeout(loop, 3000);
+      }).catch(function () { setTimeout(loop, 3000); });   // expected: the phone is off the hotspot
+    })();
+  }
+
+  get('/api/v1/network/status').then(paint).catch(function (e) {
+    text($('sub'), 'ScenePlay is not answering.'); showError(e.message);
+  });
+})();
+</script>
+</body>
+</html>

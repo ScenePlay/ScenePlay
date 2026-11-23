@@ -1,0 +1,16 @@
+[Unit]
+Description=ScenePlay Wi-Fi fallback hotspot (ops/netwatch.py)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+# System python on purpose (stdlib only): the hotspot must come up even when
+# the ScenePlay venv or the app itself is broken. @REPO@ is filled in by
+# setupNetwatch.sh.
+ExecStart=/usr/bin/python3 @REPO@/ops/netwatch.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

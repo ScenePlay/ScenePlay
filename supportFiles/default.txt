@@ -10,6 +10,11 @@ server {
 	# all exceed 1m routinely. LAN-only app, so unlimited is fine here.
 	client_max_body_size 0;
 
+	# Wi-Fi fallback hotspot: phone connectivity probes -> /setup/wifi.
+	# A glob, so this loads fine on boxes without the snippet
+	# (supportFiles/setupNetwatch.sh installs it).
+	include snippets/sceneplay-captive*.conf;
+
 	# Live updates (Server-Sent Events): no buffering, long read timeout, HTTP/1.1
 	# without the Connection header so the stream stays open through the proxy.
 	location /api/v1/events {

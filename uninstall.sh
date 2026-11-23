@@ -48,6 +48,17 @@ rm -f ~/.config/autostart/sceneplay.desktop ~/Desktop/ScenePlay.sh
 sudo rm -f /etc/sudoers.d/010_sceneplay    # password-less sudo rule written by requirements.sh
 echo "[ok] autostart entries removed"
 
+# --- Wi-Fi fallback hotspot (supportFiles/setupNetwatch.sh) ------------------
+if [[ -e /etc/systemd/system/sceneplay_netwatch.service ]]; then
+    sudo systemctl disable --now sceneplay_netwatch.service 2>/dev/null
+    sudo rm -f /etc/systemd/system/sceneplay_netwatch.service
+    sudo systemctl daemon-reload 2>/dev/null
+    sudo nmcli connection delete ScenePlay-Hotspot >/dev/null 2>&1   # only the hotspot profile; saved Wi-Fi stays
+    sudo rm -f /etc/NetworkManager/dnsmasq-shared.d/sceneplay-captive.conf \
+               /etc/nginx/snippets/sceneplay-captive.conf
+    echo "[ok] Wi-Fi fallback hotspot removed (saved Wi-Fi networks kept)"
+fi
+
 # --- nginx: put back the stock site config setupAutoStart.sh replaced -------
 if [[ -e /etc/nginx/sites-available/default.bak ]]; then
     sudo mv /etc/nginx/sites-available/default.bak /etc/nginx/sites-available/default

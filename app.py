@@ -168,6 +168,7 @@ def create_app(testing=False):
     _include_optional(app, 'routers.relay_admin')
     _include_optional(app, 'routers.obs')
     _include_optional(app, 'routers.producer')
+    _include_optional(app, 'routers.network')
 
     @app.get('/api/v1/health')
     async def health():
