@@ -403,6 +403,21 @@ def stop_music():
     return {'message': 'Music stopped and the music queue cleared.'}
 
 
+def all_stop():
+    """The player bar's All Stop: music and video stop, the queue empties and the All Stop scene's lights come
+    on (scene -1, through the same lock as /activatescenes/). Infinite Play keeps the music going, as on the button."""
+    import sql
+    from routers import public
+    with public._activate_lock:
+        public._activate_scene('-1')
+    events.emit('scene', {'scene_id': -1})
+    if sql.appsettingGetKeepMusicPlaying():
+        return {'music_kept': True,
+                'message': 'All stop: video stopped and the All Stop lights are on. The music keeps playing because '
+                           'Infinite Play is on; say stop the music to stop it too.'}
+    return {'music_kept': False, 'message': 'All stop: music and video stopped, and the All Stop lights are on.'}
+
+
 def set_keep_music(on):
     import sql
     sql.appsettingSetKeepMusicPlaying(1 if on else 0)

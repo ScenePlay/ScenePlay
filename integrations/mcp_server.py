@@ -30,7 +30,8 @@ INSTRUCTIONS = (
     "ScenePlay is the game-table jukebox and atmosphere controller. Playlists are called scenes. "
     "To play something by name, genre, artist or decade (\"play jazz\", \"some 80s music\", \"the tavern "
     "playlist\") call play_music with the words as said. play_music changes only the music; play_scene "
-    "also changes the lights, video and OBS. Volume is 0-100: for \"a bit quieter\" use set_volume with "
+    "also changes the lights, video and OBS. \"Stop the music\" is stop_music; \"all stop\" (everything) is "
+    "all_stop; \"pause\" is pause. Volume is 0-100: for \"a bit quieter\" use set_volume with "
     "change -10. Tool results carry a short `message` worth reading out.")
 
 
@@ -115,6 +116,8 @@ def build_server():
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
     write_idem = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
     destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+    # Stopping empties the play queue but deletes nothing (play_music refills it), so voice clients may use it.
+    stop = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
 
     @srv.tool(annotations=read)
     def now_playing() -> dict:
@@ -214,10 +217,17 @@ def build_server():
         """Take songs (by id) out of a playlist. The songs stay in the library."""
         return _call(mt.remove_from_playlist, playlist, song_ids)
 
-    @srv.tool(annotations=destructive)
+    @srv.tool(annotations=stop)
     def stop_music() -> dict:
-        """Stop the music and empty the music queue (video, lights and the scene stay). Prefer pause."""
+        """Stop the music and empty the music queue ("stop the music"). Video, lights and the scene stay. To stop
+        for a moment and carry on later, use pause."""
         return _call(mt.stop_music)
+
+    @srv.tool(annotations=stop)
+    def all_stop() -> dict:
+        """All Stop, like the player bar's button ("all stop", "stop everything"): music and video stop, the queue
+        empties and the All Stop lights come on. With Infinite Play on, the music keeps going."""
+        return _call(mt.all_stop)
 
     return srv
 

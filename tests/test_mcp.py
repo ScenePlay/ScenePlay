@@ -184,7 +184,9 @@ def test_mcp_is_off_by_default_and_needs_the_token(client):
         assert r.status_code == 200
         tools = {t['name']: t for t in r.json()['result']['tools']}
         assert {'play_music', 'set_volume', 'skip', 'pause', 'resume', 'now_playing'} <= set(tools)
-        assert tools['stop_music']['annotations']['destructiveHint'] is True
+        assert tools['remove_from_playlist']['annotations']['destructiveHint'] is True
+        assert tools['stop_music']['annotations']['destructiveHint'] is False      # voice clients may stop
+        assert tools['all_stop']['annotations']['destructiveHint'] is False
         assert tools['play_music']['annotations']['destructiveHint'] is False
         old = tok
         tok = m.new_token()
@@ -243,3 +245,21 @@ def test_mcp_accepts_numbers_sent_as_text(client, library):
         assert res['isError'] is False and library['calls']['volume'] == [40]
     finally:
         m.set_enabled(False)
+
+
+def test_all_stop_is_the_player_bar_button(library, monkeypatch):
+    """Scene -1 through the activation lock (music + video + All Stop lights); Infinite Play keeps the music."""
+    import media.music_tools as mt
+    import sql
+    from routers import public
+    activated = []
+    monkeypatch.setattr(public, '_activate_scene', lambda sid: activated.append(sid))
+    sql.appsettingSetKeepMusicPlaying(0)
+    r = mt.all_stop()
+    assert activated == ['-1'] and r['music_kept'] is False and 'music and video stopped' in r['message']
+    sql.appsettingSetKeepMusicPlaying(1)
+    try:
+        r = mt.all_stop()
+        assert r['music_kept'] is True and 'Infinite Play' in r['message']
+    finally:
+        sql.appsettingSetKeepMusicPlaying(0)
