@@ -158,6 +158,31 @@ def get_volume():
         return None
 
 
+def _credit(conn, song_id, name):
+    """(title, artist) for the playing song: the stored artist (set by the DM or a "- Topic" upload), else one read
+    off an "Artist - Title" name (only when that reading is fairly sure); the title loses the "Artist - " part."""
+    from media.media_facets import _TITLE_RX, clean_title, derive_artist
+    try:
+        row = conn.execute("SELECT COALESCE(artist,''), COALESCE(title,''), COALESCE(uploader,'') FROM tblMediaMetadata "
+                           "WHERE media_type='music' AND media_id=?", (song_id,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    artist, raw, uploader = row or ('', '', '')
+    artist = artist.strip()
+    if not artist:
+        guess, _src, sure = derive_artist(raw or name, uploader)
+        artist = guess if sure in ('exact', 'high', 'medium') else ''
+    title = clean_title(name) or name
+    m = _TITLE_RX.match(title)
+    if artist and m:
+        left, right = m.group(1).strip(), m.group(2).strip()
+        if _norm(left) == _norm(artist):
+            title = right
+        elif _norm(right) == _norm(artist):
+            title = left
+    return title, artist or None
+
+
 def now_playing():
     import sql
     np = sql.get_now_playing()
@@ -172,17 +197,23 @@ def now_playing():
     else:
         with _conn() as conn:
             queued = conn.execute("SELECT COUNT(*) FROM tblMusic WHERE que <> 0").fetchone()[0]
+    title = artist = None
+    if song:
+        with _conn() as conn:
+            title, artist = _credit(conn, song['id'], song['name'])
     paused = is_paused() if song else None
     volume = get_volume()
     keep = bool(sql.appsettingGetKeepMusicPlaying())
     if song:
-        msg = f'Playing "{song["name"]}"' + (' (paused)' if paused else '')
+        msg = (f'Playing "{title}"' + (f' by {artist}' if artist else ' (artist unknown)')
+               + (' (paused)' if paused else ''))
     else:
         msg = 'No music is playing'
     msg += f'; {_plural(queued, "song")} queued'
     if volume is not None:
         msg += f'; volume {volume}'
     return {'song': song['name'] if song else None, 'song_id': song['id'] if song else None,
+            'title': title, 'artist': artist,
             'paused': paused, 'volume': volume, 'queued_songs': queued, 'scene': scene_name,
             'keep_music_playing': keep, 'message': msg + '.'}
 

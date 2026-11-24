@@ -263,3 +263,34 @@ def test_all_stop_is_the_player_bar_button(library, monkeypatch):
         assert r['music_kept'] is True and 'Infinite Play' in r['message']
     finally:
         sql.appsettingSetKeepMusicPlaying(0)
+
+
+def test_now_playing_names_the_song_and_artist(library, monkeypatch):
+    """'What song is this?': the message carries the title and the artist (stored, or read off "Artist - Title")."""
+    import media.music_tools as mt
+    monkeypatch.setattr(mt, 'is_paused', lambda: False)
+    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        conn.execute("INSERT INTO tblMediaMetadata(media_type, media_id, title, uploader, artist) "
+                     "VALUES ('music', ?, 'Take Five', 'Some Channel', 'Dave Brubeck')", (library['take5'],))
+        conn.execute("UPDATE tblMusic SET displayName = 'Miles Davis - Blue in Green (Official Audio)' "
+                     "WHERE song_ID = ?", (library['blue'],))
+        conn.execute("UPDATE tblAppSettings SET value = ? WHERE name = 'currentsong'", (str(library['take5']),))
+        conn.commit()
+        np = mt.now_playing()
+        assert (np['title'], np['artist']) == ('Take Five', 'Dave Brubeck')
+        assert np['message'].startswith('Playing "Take Five" by Dave Brubeck;')
+
+        conn.execute("UPDATE tblAppSettings SET value = ? WHERE name = 'currentsong'", (str(library['blue']),))
+        conn.commit()
+        np = mt.now_playing()
+        assert (np['title'], np['artist']) == ('Blue in Green', 'Miles Davis')
+
+        conn.execute("UPDATE tblAppSettings SET value = ? WHERE name = 'currentsong'", (str(library['jig']),))
+        conn.commit()
+        assert mt.now_playing()['message'].startswith('Playing "Tavern Jig" (artist unknown);')
+    finally:
+        conn.execute("DELETE FROM tblMediaMetadata WHERE media_type = 'music'")
+        conn.execute("UPDATE tblAppSettings SET value = '0' WHERE name = 'currentsong'")
+        conn.commit()
+        conn.close()
