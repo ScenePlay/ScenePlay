@@ -1,4 +1,4 @@
-"""ScenePlay's MCP server: music control for AI clients (Claude, a local
+"""ScenePlay's MCP server: music and video control for AI clients (Claude, a local
 Ollama app, the 3dObject voice characters).
 
 Streamable HTTP at /mcp on the app's own port, stateless + JSON replies.
@@ -9,7 +9,7 @@ instance/mcp_token (made / replaced from that card, shown once, never logged,
 never in a URL) — the old playback URLs stay LAN-open as they always were,
 but these tools also write playlists, so they always want the token.
 
-The tools are thin wrappers over media.music_tools. Annotations matter to the
+The tools are thin wrappers over media.music_tools and media.video_tools. Annotations matter to the
 clients: the voice service hides every tool marked destructive (a misheard
 word must never empty the queue or delete links).
 """
@@ -31,8 +31,10 @@ INSTRUCTIONS = (
     "To play something by name, genre, artist or decade (\"play jazz\", \"some 80s music\", \"the tavern "
     "playlist\") call play_music with the words as said. play_music changes only the music; play_scene "
     "also changes the lights, video and OBS. \"Stop the music\" is stop_music; \"all stop\" (everything) is "
-    "all_stop; \"pause\" is pause. Volume is 0-100: for \"a bit quieter\" use set_volume with "
-    "change -10. Tool results carry a short `message` worth reading out.")
+    "all_stop; \"pause\" is pause. Videos have their own tools: play_video, skip_video, pause_video, "
+    "resume_video, stop_video (\"play the campfire video\", \"next video\", \"stop the video\"). Volume is "
+    "0-100 and covers music and video: for \"a bit quieter\" use set_volume with change -10. Tool results "
+    "carry a short `message` worth reading out.")
 
 
 # ── switch + token ────────────────────────────────────────────────────────────
@@ -109,6 +111,7 @@ def build_server():
     from mcp.types import ToolAnnotations
 
     import media.music_tools as mt
+    import media.video_tools as vt
     from version import __version__
 
     srv = MCPServer('ScenePlay', instructions=INSTRUCTIONS, version=__version__)
@@ -121,8 +124,8 @@ def build_server():
 
     @srv.tool(annotations=read)
     def now_playing() -> dict:
-        """What is playing now: the song, paused or not, the volume (0-100), how many songs are queued
-        and the active scene."""
+        """What is playing now: the song and its artist, paused or not, the volume (0-100), how many songs
+        are queued, the video on screen and the active scene."""
         return _call(mt.now_playing)
 
     @srv.tool(annotations=write)
@@ -228,6 +231,35 @@ def build_server():
         """All Stop, like the player bar's button ("all stop", "stop everything"): music and video stop, the queue
         empties and the All Stop lights come on. With Infinite Play on, the music keeps going."""
         return _call(mt.all_stop)
+
+    # ── video ──
+    @srv.tool(annotations=write)
+    def play_video(request: str, replace: bool = True) -> dict:
+        """Play videos by what was asked for: a scene name (its videos), a genre, or words in video titles.
+        Examples: "campfire", "rain", "the tavern video". replace=True (default) swaps the video queue and cuts to
+        it; replace=False adds to the video queue. Video only: the music, lights and scene stay as they are."""
+        return _call(vt.play_video, request, replace)
+
+    @srv.tool(annotations=write)
+    def skip_video() -> dict:
+        """Skip the current video ("next video"); the next one in the video queue starts."""
+        return _call(vt.skip_video)
+
+    @srv.tool(annotations=write_idem)
+    def pause_video() -> dict:
+        """Pause the video (safe to call when already paused). The music keeps playing."""
+        return _call(vt.pause_video)
+
+    @srv.tool(annotations=write_idem)
+    def resume_video() -> dict:
+        """Resume a paused video (safe to call when already playing)."""
+        return _call(vt.resume_video)
+
+    @srv.tool(annotations=stop)
+    def stop_video() -> dict:
+        """Stop the video and empty the video queue ("stop the video", "turn off the TV"). Music, lights and the
+        scene stay."""
+        return _call(vt.stop_video)
 
     return srv
 

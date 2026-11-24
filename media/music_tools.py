@@ -212,8 +212,11 @@ def now_playing():
     msg += f'; {_plural(queued, "song")} queued'
     if volume is not None:
         msg += f'; volume {volume}'
+    video = np.get('video') or None
+    msg += f'; video "{video["name"]}" is on' if video else '; no video is playing'
     return {'song': song['name'] if song else None, 'song_id': song['id'] if song else None,
             'title': title, 'artist': artist,
+            'video': video['name'] if video else None, 'video_id': video['id'] if video else None,
             'paused': paused, 'volume': volume, 'queued_songs': queued, 'scene': scene_name,
             'keep_music_playing': keep, 'message': msg + '.'}
 
@@ -230,11 +233,14 @@ def list_playlists():
     out = []
     for sid, name in rows:
         st = stats.get(sid, {})
-        out.append({'id': sid, 'name': name, 'songs': st.get('songs', 0),
+        out.append({'id': sid, 'name': name, 'songs': st.get('songs', 0), 'videos': st.get('videos', 0),
                     'play_time': st.get('play_time', ''), 'smart': sid in smart})
     with_music = [p for p in out if p['songs']]
+    with_video = [p for p in out if p['videos']]
     msg = (f'{_plural(len(with_music), "playlist")} with music: ' + ', '.join(p['name'] for p in with_music[:40]) + '.'
            if with_music else 'No playlist has music yet.')
+    if with_video:
+        msg += f' {_plural(len(with_video), "scene")} with video: ' + ', '.join(p['name'] for p in with_video[:20]) + '.'
     return {'playlists': out[:200], 'message': msg}
 
 

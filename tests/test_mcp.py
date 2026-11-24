@@ -294,3 +294,108 @@ def test_now_playing_names_the_song_and_artist(library, monkeypatch):
         conn.execute("UPDATE tblAppSettings SET value = '0' WHERE name = 'currentsong'")
         conn.commit()
         conn.close()
+
+
+@pytest.fixture()
+def videos(library, monkeypatch):
+    """Two campfire videos linked to the Tavern scene and a lone rain video; video skips/kills recorded."""
+    import sql
+    from media import mpv_ipc
+    calls = {'video_kills': 0, 'sent': []}
+    monkeypatch.setattr(sql, 'queueVideo_next', lambda: calls.__setitem__('video_kills', calls['video_kills'] + 1))
+    monkeypatch.setattr(mpv_ipc, 'mpv_command', lambda kind, cmd: calls['sent'].append((kind, cmd)) or True)
+    conn = sqlite3.connect(config.DB_PATH)
+    c = conn.cursor()
+
+    def video(name, ok=3):
+        return c.execute("INSERT INTO tblVideoMedia(path, title, displayName, active, que, dnLoadStatus, pTimes) "
+                         "VALUES ('/v/', ?, ?, 1, 0, ?, 0)", (name + '.mp4', name, ok)).lastrowid
+    ids = {'fire1': video('Campfire Night'), 'fire2': video('Campfire Embers'), 'rain': video('Rain on Window')}
+    c.executemany("INSERT INTO tblVideoScene(scene_ID, video_ID, DisplayScreen_ID, orderBy, volume, loops) "
+                  "VALUES (?, ?, 0, ?, 100, 0)", [(library['tavern'], ids['fire1'], 1),
+                                                  (library['tavern'], ids['fire2'], 2)])
+    c.execute("UPDATE tblAppSettings SET value = '0' WHERE name = 'currentvideo'")
+    conn.commit()
+    yield {**ids, 'calls': calls}
+    c.execute("DELETE FROM tblVideoScene")
+    c.execute("DELETE FROM tblVideoMedia")
+    c.execute("UPDATE tblAppSettings SET value = '0' WHERE name = 'currentvideo'")
+    conn.commit()
+    conn.close()
+
+
+def _videos_queued():
+    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        return {r[0] for r in conn.execute("SELECT video_ID FROM tblVideoMedia WHERE que <> 0")}
+    finally:
+        conn.close()
+
+
+def _video_flag():
+    import sql
+    return int(sql.appsettingVideoPlayFlag()[0][2])
+
+
+def _set_current_video(vid):
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.execute("UPDATE tblAppSettings SET value = ? WHERE name = 'currentvideo'", (str(vid),))
+    conn.commit()
+    conn.close()
+
+
+def test_play_video_by_scene_name_or_title(videos, library):
+    import media.video_tools as vt
+    r = vt.play_video('the tavern video')
+    assert _videos_queued() == {videos['fire1'], videos['fire2']} and _video_flag() == 1
+    assert r['videos'] == 2 and 'Tavern' in r['message']
+    assert videos['calls']['video_kills'] == 0                   # nothing was on screen: no cut
+    _set_current_video(videos['fire1'])
+    r = vt.play_video('rain')
+    assert _videos_queued() == {videos['rain']} and videos['calls']['video_kills'] == 1
+    assert r['message'] == 'Playing "Rain on Window" (1 video).'
+    vt.play_video('campfire embers', replace=False)
+    assert _videos_queued() == {videos['rain'], videos['fire2']}
+    with pytest.raises(vt.MusicToolError, match='No video matches'):
+        vt.play_video('volcano')
+
+
+def test_video_skip_pause_stop(videos, library):
+    import media.video_tools as vt
+    assert vt.skip_video()['skipped'] is False
+    vt.pause_video()
+    vt.resume_video()
+    assert videos['calls']['sent'] == [('video', 'set pause yes'), ('video', 'set pause no')]
+    vt.play_video('tavern')
+    _set_current_video(videos['fire1'])
+    assert vt.skip_video()['skipped'] is True
+    r = vt.stop_video()
+    assert _videos_queued() == set() and _video_flag() == 0     # flag off: the worker does not end the scene
+    assert 'Video stopped' in r['message']
+    import sql
+    assert int(sql.appsettingFlagGet('currentvideo') or 0) == 0
+
+
+def test_now_playing_and_playlists_mention_video(videos, library, monkeypatch):
+    import media.music_tools as mt
+    monkeypatch.setattr(mt, 'is_paused', lambda: None)
+    assert mt.now_playing()['message'].endswith('no video is playing.')
+    _set_current_video(videos['rain'])
+    np = mt.now_playing()
+    assert np['video'] == 'Rain on Window' and 'video "Rain on Window" is on' in np['message']
+    pl = {p['name']: p for p in mt.list_playlists()['playlists']}
+    assert pl['Tavern']['videos'] == 2
+    assert '1 scene with video: Tavern' in mt.list_playlists()['message']
+
+
+def test_mcp_lists_the_video_tools(client):
+    import integrations.mcp_server as m
+    m.set_enabled(True)
+    tok = m.new_token()
+    try:
+        tools = {t['name']: t for t in _rpc(client, tok, 'tools/list').json()['result']['tools']}
+        assert {'play_video', 'skip_video', 'pause_video', 'resume_video', 'stop_video'} <= set(tools)
+        assert not any(tools[n]['annotations']['destructiveHint'] for n in
+                       ('play_video', 'skip_video', 'pause_video', 'resume_video', 'stop_video'))
+    finally:
+        m.set_enabled(False)
